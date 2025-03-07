@@ -11,12 +11,14 @@
     }
   </style>
   <script>
-    if (!window.appLoaded) {
-      const el = document.createElement('script');
-      el.defer = true;
-      el.src = './lib/index.js?v=' + Date.now();
-      document.body.appendChild(el);
-    }
+    document.body.onload = () => {
+      if (!window.appLoaded) {
+        const el = document.createElement('script');
+        el.defer = true;
+        el.src = './lib/index.js?v=' + Date.now();
+        document.body.appendChild(el);
+      }
+    };
   </script>
 </head>
 
