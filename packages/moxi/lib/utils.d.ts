@@ -1,0 +1,10 @@
+export declare const uc: (s?: string) => string;
+export declare const lc: (s?: string) => string;
+export declare const padRight: (val?: string, length?: number, padWith?: string) => string;
+export declare const pr: (val?: string, length?: number, padWith?: string) => string;
+export declare const getRandomInt: (max: any, min?: number) => number;
+export declare const roundTo: (places: any, value: any) => number;
+export declare const lerp: (begin: any, end: any, mag: any) => number;
+export declare function metersToPixels(m: number): number;
+export declare function pixelsToMeters(p: number): number;
+export declare const fetchXml: (url: string) => Promise<string>;

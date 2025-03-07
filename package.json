@@ -1,0 +1,25 @@
+{
+  "name": "moxi",
+  "version": "0.1.0",
+  "description": "",
+  "private": true,
+  "workspaces": [
+    "packages/moxi",
+    "packages/moxi-edit",
+    "packages/examples"
+  ],
+  "scripts": {
+    "build": "npm run build -w --if-present",
+    "clean": "npm run clean -w --if-present",
+    "build:prod": "npm run build:prod -w --if-present",
+    "watch": "concurrently \"npm run watch --workspace=moxi\" \"npm run watch --workspace=moxi-edit\"",
+    "examples": "npm run examples -w --if-present",
+    "editor": "npm run local -w --if-present"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}

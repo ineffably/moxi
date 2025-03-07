@@ -1,0 +1,33 @@
+{
+  "compilerOptions": {
+    "incremental": true,
+    "module": "commonjs",
+    "target": "ES2022",
+    "lib": ["DOM", "ES2022"],
+    "types": ["node"],
+    "noImplicitAny": false,
+    "removeComments": true,
+    "preserveConstEnums": true,
+    "jsx": "react-jsx",
+    "sourceMap": true,
+    "inlineSources": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "allowJs": true,
+    "strict": false,
+    "declaration": true
+  },
+  "exclude": [
+    "node_modules",
+    "./lib/**/*",
+    "dist",
+    "build/**/*",
+    "babel.config.js",
+    "jest.config.js",
+    "wepback.config.js",
+    "assets"
+  ]
+}
+
+

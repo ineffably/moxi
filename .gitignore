@@ -1,0 +1,7 @@
+# npm module cache
+node_modules
+
+# build output
+# I want the build output for github pages support
+# lib
+
