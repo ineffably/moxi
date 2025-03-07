@@ -11,14 +11,14 @@
     }
   </style>
   <script>
-    document.body.onload = () => {
+    window.addEventListener('onload', () => {
       if (!window.appLoaded) {
         const el = document.createElement('script');
         el.defer = true;
         el.src = './lib/index.js?v=' + Date.now();
         document.body.appendChild(el);
       }
-    };
+    });
   </script>
 </head>
 
