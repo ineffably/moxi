@@ -9,7 +9,7 @@
     "build": "webpack --mode development",
     "clean": "rimraf ./lib",
     "build:clean": "npm run clean && npm run build",
-    "build:prod": "npm run clean && npm run webpack --mode production"
+    "build:prod": "npm run clean && webpack --mode production"
   },
   "keywords": [],
   "author": "",

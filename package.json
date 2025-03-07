@@ -9,12 +9,12 @@
     "packages/examples"
   ],
   "scripts": {
-    "build": "npm run build -w --if-present",
-    "clean": "npm run clean -w --if-present",
-    "build:prod": "npm run build:prod -w --if-present",
+    "build": "npm run build --workspaces --if-present",
+    "clean": "npm run clean --workspaces --if-present",
+    "build:prod": "npm run build:prod --workspaces --if-present",
     "watch": "concurrently \"npm run watch --workspace=moxi\" \"npm run watch --workspace=moxi-edit\"",
-    "examples": "npm run examples -w --if-present",
-    "editor": "npm run local -w --if-present"
+    "examples": "npm run examples --workspaces --if-present",
+    "editor": "npm run local --workspaces --if-present"
   },
   "keywords": [],
   "author": "",

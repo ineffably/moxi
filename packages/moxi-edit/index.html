@@ -11,9 +11,12 @@
     }
   </style>
   <script>
-    // window.basePIXI = PIXI;
-    // console.log('PIXI', PIXI.VERSION);
-    // console.log('window.basePIXI === PIXI', (window).basePIXI === PIXI)
+    if (!window.appLoaded) {
+      const el = document.createElement('script');
+      el.defer = true;
+      el.src = './lib/index.js?v=' + Date.now();
+      document.body.appendChild(el);
+    }
   </script>
 </head>
 
