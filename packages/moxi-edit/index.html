@@ -11,14 +11,15 @@
     }
   </style>
   <script>
-    window.addEventListener('onload', () => {
+    window.setTimeout(() => {
+      console.log('appending bundle ... standby');
       if (!window.appLoaded) {
         const el = document.createElement('script');
         el.defer = true;
         el.src = 'lib/index.js?v=' + Date.now();
         document.body.appendChild(el);
       }
-    });
+    }, 500);
   </script>
 </head>
 
