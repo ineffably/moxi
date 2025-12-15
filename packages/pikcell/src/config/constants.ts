@@ -287,3 +287,38 @@ export const TOOL_CONSTANTS = {
     select: 'default',
   },
 } as const;
+
+/**
+ * Animation preview constants
+ */
+export const ANIMATION_CONSTANTS = {
+  /** Default FPS for new animations */
+  DEFAULT_FPS: 12,
+
+  /** Minimum FPS */
+  MIN_FPS: 1,
+
+  /** Maximum FPS */
+  MAX_FPS: 60,
+
+  /** Minimum frame duration in milliseconds (1000ms / MAX_FPS) */
+  MIN_FRAME_DURATION_MS: 17,
+
+  /** Maximum frame duration in milliseconds (1000ms / MIN_FPS) */
+  MAX_FRAME_DURATION_MS: 1000,
+
+  /** Default preview scale */
+  DEFAULT_PREVIEW_SCALE: 8,
+
+  /** Minimum preview scale */
+  MIN_PREVIEW_SCALE: 1,
+
+  /** Maximum preview scale */
+  MAX_PREVIEW_SCALE: 32,
+
+  /** Maximum frames per sequence */
+  MAX_FRAMES_PER_SEQUENCE: 64,
+
+  /** Maximum animation preview windows */
+  MAX_PREVIEW_WINDOWS: 8,
+} as const;

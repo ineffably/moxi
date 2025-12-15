@@ -140,6 +140,31 @@ export const COMPONENT_STYLES = {
 } as const;
 
 // ============================================================================
+// Animation Preview Card
+// ============================================================================
+
+export const ANIMATION_PREVIEW_CARD_CONFIG = {
+  /** Default preview size in grid units (square) */
+  defaultPreviewSize: 48,
+  /** Minimum preview size in grid units */
+  minPreviewSize: 24,
+  /** Maximum preview size in grid units */
+  maxPreviewSize: 128,
+  /** Control button size in grid units (title bar controls) */
+  controlButtonSize: 8,
+  /** Frame thumbnail size in grid units */
+  frameThumbnailSize: 10,
+  /** Add frame button size in grid units (smaller than thumbnails) */
+  addButtonSize: 8,
+  /** Maximum visible frame thumbnails before scrolling */
+  maxVisibleFrames: 6,
+  /** Spacing between frame thumbnails */
+  frameSpacing: 1,
+  /** Title bar control spacing */
+  titleControlSpacing: 2
+} as const;
+
+// ============================================================================
 // Aggregate export for convenience
 // ============================================================================
 
@@ -151,5 +176,6 @@ export const CARD_CONFIGS = {
   infoBar: INFO_BAR_CONFIG,
   scale: SCALE_CARD_CONFIG,
   popup: POPUP_TOOLBAR_CONFIG,
-  styles: COMPONENT_STYLES
+  styles: COMPONENT_STYLES,
+  animationPreview: ANIMATION_PREVIEW_CARD_CONFIG
 } as const;

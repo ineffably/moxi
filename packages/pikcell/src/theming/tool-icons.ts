@@ -11,6 +11,7 @@ import * as PIXI from 'pixi.js';
 
 export type ToolType = 'pencil' | 'eraser' | 'fill' | 'eyedrop' | 'selection' | 'shape';
 export type ShapeType = 'line' | 'circle' | 'circle-filled' | 'square' | 'square-filled';
+export type PlaybackIconType = 'play' | 'pause' | 'loop' | 'pingpong' | 'add-frame' | 'settings';
 
 // Cache for generated textures
 const textureCache: Map<string, PIXI.Texture> = new Map();
@@ -156,6 +157,78 @@ const SHAPE_ICON_GRIDS: Record<ShapeType, string> = {
 };
 
 /**
+ * 8x8 ASCII playback icon definitions (compact for title bar controls)
+ * # = filled pixel, . = empty
+ */
+const PLAYBACK_ICON_GRIDS: Record<PlaybackIconType, string> = {
+  play: `
+..#.....
+..##....
+..###...
+..####..
+..###...
+..##....
+..#.....
+........
+`.trim(),
+
+  pause: `
+.##.##..
+.##.##..
+.##.##..
+.##.##..
+.##.##..
+.##.##..
+.##.##..
+........
+`.trim(),
+
+  loop: `
+..####..
+.#....#.
+#......#
+#..##..#
+#..##..#
+#......#
+.#....#.
+..####..
+`.trim(),
+
+  pingpong: `
+........
+#......#
+##....##
+###..###
+###..###
+##....##
+#......#
+........
+`.trim(),
+
+  'add-frame': `
+...##...
+...##...
+...##...
+########
+########
+...##...
+...##...
+...##...
+`.trim(),
+
+  settings: `
+..#..#..
+.######.
+##....##
+#..##..#
+#..##..#
+##....##
+.######.
+..#..#..
+`.trim()
+};
+
+/**
  * Parse ASCII grid and render to Graphics at target size
  * Each cell is rendered as (pixelSize x pixelSize) rectangle
  * Renders directly at target size for pixel-perfect results (like SVG approach)
@@ -297,6 +370,61 @@ export function createShapeIcon(shape: ShapeType, size: number, color: number, r
 
   if (!textureCache.has(cacheKey)) {
     const graphic = drawShapeGraphic(shape, color, pixelSize);
+    graphic.roundPixels = true;
+
+    const texture = renderer.generateTexture({
+      target: graphic,
+      resolution: 1,
+      antialias: false
+    });
+
+    texture.source.scaleMode = 'nearest';
+    graphic.destroy();
+    textureCache.set(cacheKey, texture);
+  }
+
+  const sprite = new PIXI.Sprite(textureCache.get(cacheKey)!);
+  sprite.roundPixels = true;
+  sprite.texture.source.scaleMode = 'nearest';
+
+  // No scaling needed - texture is already at target size
+  return sprite;
+}
+
+// ============================================================================
+// Playback Icons (8x8 for animation controls)
+// ============================================================================
+
+/** Playback icon dimensions: 8 wide x 8 tall cells */
+export const PLAYBACK_ICON_WIDTH = 8;
+export const PLAYBACK_ICON_HEIGHT = 8;
+
+/**
+ * Draw a playback icon directly into a Graphics object.
+ * Perfect for drawing icons in the same pass as button backgrounds.
+ */
+export function drawPlaybackIconInto(g: PIXI.Graphics, icon: PlaybackIconType, offsetX: number, offsetY: number, color: number, pixelSize: number): void {
+  drawAsciiGridInto(g, PLAYBACK_ICON_GRIDS[icon], offsetX, offsetY, color, pixelSize);
+}
+
+/**
+ * Draws a playback icon from ASCII grid at target size
+ */
+function drawPlaybackGraphic(icon: PlaybackIconType, color: number, pixelSize: number): PIXI.Graphics {
+  return renderAsciiGrid(PLAYBACK_ICON_GRIDS[icon], color, pixelSize);
+}
+
+/**
+ * Creates a playback icon sprite rendered directly at target size
+ * No sprite scaling needed - texture is generated at final size for pixel-perfect rendering
+ */
+export function createPlaybackIcon(icon: PlaybackIconType, size: number, color: number, renderer: PIXI.Renderer): PIXI.Sprite {
+  // Cache key includes size since we render at target size
+  const pixelSize = Math.floor(size / PLAYBACK_ICON_WIDTH);
+  const cacheKey = `playback_${icon}_${color}_${pixelSize}`;
+
+  if (!textureCache.has(cacheKey)) {
+    const graphic = drawPlaybackGraphic(icon, color, pixelSize);
     graphic.roundPixels = true;
 
     const texture = renderer.generateTexture({

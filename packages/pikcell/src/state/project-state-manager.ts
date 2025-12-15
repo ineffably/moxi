@@ -7,6 +7,7 @@ import { SpriteSheetType } from '../controllers/sprite-sheet-controller';
 import { MainToolType } from '../cards/toolbar-card';
 import { ShapeType } from '../theming/tool-icons';
 import { PaletteType } from '../theming/palettes';
+import { AnimationPreviewState } from '../interfaces/animation-types';
 
 const PROJECT_STATE_KEY = 'sprite-editor-project';
 
@@ -46,6 +47,7 @@ export interface ProjectState {
   selectedTool?: MainToolType; // Active tool (pencil, eraser, etc.)
   selectedShape?: ShapeType; // Active shape for shape tool
   selectedPalette?: PaletteType; // Active color palette
+  animationPreviews?: AnimationPreviewState[]; // Animation preview windows
 }
 
 /**
@@ -53,7 +55,7 @@ export interface ProjectState {
  * Handles saving and loading of sprite project data to/from localStorage
  */
 export class ProjectStateManager {
-  private static readonly CURRENT_VERSION = 1;
+  private static readonly CURRENT_VERSION = 2;
 
   /**
    * Create a new empty project
@@ -68,7 +70,8 @@ export class ProjectStateManager {
       selectedColorIndex: 0,
       selectedTool: 'pencil',
       selectedShape: 'square',
-      selectedPalette: 'pico8'
+      selectedPalette: 'pico8',
+      animationPreviews: []
     };
   }
 
@@ -145,12 +148,16 @@ export class ProjectStateManager {
    * Migrate old project versions to current version
    */
   private static migrateProject(state: ProjectState): ProjectState {
-    // For now, just update the version
-    // In the future, handle migrations between versions here
-    return {
-      ...state,
-      version: this.CURRENT_VERSION
-    };
+    let migrated = { ...state };
+
+    // v1 -> v2: Add animationPreviews field
+    if (migrated.version < 2) {
+      migrated.animationPreviews = [];
+      migrated.version = 2;
+      console.log('Migrated project from v1 to v2 (added animation previews)');
+    }
+
+    return migrated;
   }
 
   /**

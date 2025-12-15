@@ -23,6 +23,7 @@
 import * as PIXI from 'pixi.js';
 import { PixelCard } from './components/pixel-card';
 import { createPixelDialog, PixelDialogResult } from './components/pixel-dialog';
+import { createAnimationSettingsDialog } from './components/animation-settings-dialog';
 import { createSpriteSheetCard, SPRITESHEET_CONFIGS } from './components/spritesheet-card';
 import { SpriteSheetType } from './controllers/sprite-sheet-controller';
 import { UIStateManager } from './state/ui-state-manager';
@@ -47,6 +48,7 @@ import { UIManager } from './managers/ui-manager';
 import { LayoutManager } from './managers/layout-manager';
 import { FileOperationsManager } from './managers/file-operations-manager';
 import { SpriteCardFactory } from './managers/sprite-card-factory';
+import { AnimationPreviewManager } from './managers/animation-preview-manager';
 import { SpriteSheetInstance } from './interfaces/managers';
 
 // Constants
@@ -74,6 +76,7 @@ export class SpriteEditor {
   private fileOperationsManager: FileOperationsManager;
   private spriteCardFactory: SpriteCardFactory;
   private undoManager: UndoManager;
+  private animationPreviewManager: AnimationPreviewManager;
 
   // Core dependencies
   private renderer: PIXI.Renderer;
@@ -121,6 +124,9 @@ export class SpriteEditor {
   // Track current dialog for cleanup
   private currentDialog: PixelDialogResult | null = null;
 
+  // Track which animation preview is currently in selection mode
+  private animationSelectionModePreviewId: string | null = null;
+
   constructor(options: SpriteEditorOptions) {
     this.renderer = options.renderer;
     this.scene = options.scene;
@@ -131,6 +137,7 @@ export class SpriteEditor {
     this.layoutManager = new LayoutManager(this.renderer);
     this.fileOperationsManager = new FileOperationsManager();
     this.undoManager = new UndoManager({ maxHistory: 50 });
+    this.animationPreviewManager = new AnimationPreviewManager();
 
     // Initialize sprite card factory
     this.spriteCardFactory = new SpriteCardFactory({
@@ -395,6 +402,16 @@ export class SpriteEditor {
         console.log(`Hovering cell: ${cellX}, ${cellY}`);
       },
       onCellClick: (cellX, cellY) => {
+        // Check if we're in animation selection mode
+        if (this.animationSelectionModePreviewId) {
+          const preview = this.animationPreviewManager.get(this.animationSelectionModePreviewId);
+          if (preview) {
+            preview.card.handleCellClick(cellX, cellY);
+            this.saveProjectState();
+            return;
+          }
+        }
+        // Normal behavior: create/update sprite card for this cell
         createSpriteCardForCell(cellX, cellY);
         this.saveProjectState();
       },
@@ -910,6 +927,7 @@ export class SpriteEditor {
         onSave: () => this.handleSave(),
         onLoad: () => this.handleLoad(),
         onExport: () => this.handleExport(),
+        onNewAnimation: () => this.createAnimationPreview(),
         onApplyLayout: () => this.applyDefaultLayout(),
         onSaveLayoutSlot: (slot) => this.handleSaveLayoutSlot(slot),
         onLoadLayoutSlot: (slot) => this.handleLoadLayoutSlot(slot),
@@ -1035,6 +1053,7 @@ export class SpriteEditor {
       this.projectState.selectedTool = this.currentTool;
       this.projectState.selectedShape = this.currentShapeType;
       this.projectState.selectedPalette = this.currentPaletteType;
+      this.projectState.animationPreviews = this.animationPreviewManager.exportStates();
 
       const saveResult = ProjectStateManager.saveProject(this.projectState);
       if (!saveResult.success) {
@@ -1067,6 +1086,8 @@ export class SpriteEditor {
     this.projectState.selectedColorIndex = this.selectedColorIndex;
     this.projectState.selectedTool = this.currentTool;
     this.projectState.selectedShape = this.currentShapeType;
+    this.projectState.selectedPalette = this.currentPaletteType;
+    this.projectState.animationPreviews = this.animationPreviewManager.exportStates();
 
     const saveResult = ProjectStateManager.saveProject(this.projectState);
     if (!saveResult.success) {
@@ -1117,6 +1138,123 @@ export class SpriteEditor {
 
       this.createNewSpriteSheet(sheetState.type, sheetState.showGrid, sheetState);
     });
+
+    // Restore animation previews
+    if (this.projectState.animationPreviews && this.projectState.animationPreviews.length > 0) {
+      this.animationPreviewManager.importStates(this.projectState.animationPreviews, {
+        renderer: this.renderer,
+        scene: this.scene,
+        getSpriteSheetController: (id) => {
+          const instance = this.spriteSheetManager.get(id);
+          return instance?.sheetCard?.controller ?? null;
+        },
+        onFocus: (id) => {
+          const preview = this.animationPreviewManager.get(id);
+          if (preview) {
+            this.scene.setChildIndex(preview.card.container, this.scene.children.length - 1);
+          }
+        },
+        onSelectionModeChange: (previewId, isSelecting) => {
+          if (isSelecting) {
+            this.animationSelectionModePreviewId = previewId;
+          } else if (this.animationSelectionModePreviewId === previewId) {
+            this.animationSelectionModePreviewId = null;
+          }
+          this.saveProjectState();
+        },
+        onShowSettings: (previewId) => {
+          this.showAnimationSettings(previewId);
+        },
+        onStateChange: () => {
+          this.saveProjectState();
+        }
+      });
+    }
+  }
+
+  /**
+   * Create a new animation preview window
+   */
+  private createAnimationPreview(): void {
+    const activeSheet = this.spriteSheetManager.getActive();
+    if (!activeSheet || !activeSheet.sheetCard) {
+      // Show dialog if no sprite sheet exists
+      const dialog = createPixelDialog({
+        title: 'No Sprite Sheet',
+        message: 'Create a sprite sheet first before creating animations.',
+        buttons: [{ label: 'OK', onClick: () => {} }],
+        renderer: this.renderer
+      });
+      this.scene.addChild(dialog.container);
+      return;
+    }
+
+    const instance = this.animationPreviewManager.create({
+      spriteSheetId: activeSheet.id,
+      spriteSheetController: activeSheet.sheetCard.controller,
+      renderer: this.renderer,
+      scene: this.scene,
+      x: 200,
+      y: 150,
+      onFocus: (id) => {
+        // Bring animation card to front
+        const preview = this.animationPreviewManager.get(id);
+        if (preview) {
+          this.scene.setChildIndex(preview.card.container, this.scene.children.length - 1);
+        }
+      },
+      onSelectionModeChange: (previewId, isSelecting) => {
+        if (isSelecting) {
+          // This preview is now in selection mode
+          this.animationSelectionModePreviewId = previewId;
+          console.log(`Animation preview ${previewId} entered selection mode`);
+        } else {
+          // Exiting selection mode
+          if (this.animationSelectionModePreviewId === previewId) {
+            this.animationSelectionModePreviewId = null;
+            console.log(`Animation preview ${previewId} exited selection mode`);
+          }
+        }
+        this.saveProjectState();
+      },
+      onShowSettings: (previewId) => {
+        this.showAnimationSettings(previewId);
+      },
+      onStateChange: () => {
+        this.saveProjectState();
+      }
+    });
+
+    if (instance) {
+      console.log(`Created animation preview: ${instance.id}`);
+      this.saveProjectState();
+    }
+  }
+
+  /**
+   * Show animation settings dialog for a preview
+   */
+  private showAnimationSettings(previewId: string): void {
+    const preview = this.animationPreviewManager.get(previewId);
+    if (!preview) return;
+
+    const sequence = preview.card.getSequence();
+
+    const dialog = createAnimationSettingsDialog({
+      sequence,
+      renderer: this.renderer,
+      onApply: (updatedSequence) => {
+        // Update the preview's sequence
+        preview.card.setSequence(updatedSequence);
+        this.saveProjectState();
+        console.log(`Animation settings updated for ${previewId}`);
+      },
+      onCancel: () => {
+        console.log('Animation settings cancelled');
+      }
+    });
+
+    this.scene.addChild(dialog.container);
   }
 
   /**
@@ -1184,6 +1322,7 @@ export class SpriteEditor {
     });
 
     this.spriteSheetManager.clear();
+    this.animationPreviewManager.clear();
     this.projectState = ProjectStateManager.createEmptyProject();
 
     // Reset palette to default

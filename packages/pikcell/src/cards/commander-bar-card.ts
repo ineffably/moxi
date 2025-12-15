@@ -24,6 +24,7 @@ export interface CommanderBarCallbacks {
   onSave?: () => void;
   onLoad?: () => void;
   onExport?: () => void;
+  onNewAnimation?: () => void;
   onApplyLayout?: () => void;
   onSaveLayoutSlot?: (slot: 'A' | 'B' | 'C') => void;
   onLoadLayoutSlot?: (slot: 'A' | 'B' | 'C') => void;
@@ -54,7 +55,8 @@ const LEFT_BUTTONS: ButtonDef[] = [
   { label: 'New', callbackKey: 'onNew' },
   { label: 'Save', callbackKey: 'onSave' },
   { label: 'Load', callbackKey: 'onLoad' },
-  { label: 'Export', callbackKey: 'onExport' }
+  { label: 'Export', callbackKey: 'onExport' },
+  { label: 'Anim', callbackKey: 'onNewAnimation' }
 ];
 
 /** Layout slot identifiers */
