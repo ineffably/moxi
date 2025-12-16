@@ -42,8 +42,8 @@ export interface AnimationPreviewState {
   id: string;
   /** Which sprite sheet this animates */
   spriteSheetId: string;
-  /** Animation sequence configuration */
-  sequence: AnimationSequenceConfig;
+  /** Animation sequence configurations (supports multiple rows) */
+  sequences: AnimationSequenceConfig[];
   /** Display scale */
   scale: number;
   /** Current playback state */

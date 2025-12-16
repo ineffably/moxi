@@ -34,7 +34,8 @@ export interface CreatePreviewOptions {
   scene: PIXI.Container;
   x?: number;
   y?: number;
-  sequence?: AnimationSequenceConfig;
+  /** Initial animation sequences (supports multiple rows) */
+  sequences?: AnimationSequenceConfig[];
   onFocus?: (id: string) => void;
   onSelectionModeChange?: (previewId: string, isSelecting: boolean) => void;
   onShowSettings?: (previewId: string) => void;
@@ -75,7 +76,7 @@ export class AnimationPreviewManager {
       y: spawnY,
       renderer: options.renderer,
       spriteSheetController: options.spriteSheetController,
-      initialSequence: options.sequence,
+      initialSequences: options.sequences,
       onClose: () => {
         this.remove(id);
       },
@@ -204,14 +205,14 @@ export class AnimationPreviewManager {
    */
   exportStates(): AnimationPreviewState[] {
     return this.getAll().map(instance => {
-      const sequence = instance.card.getSequence();
+      const sequences = instance.card.getSequences();
       const card = instance.card.card;
       const contentSize = card.getContentSize();
 
       return {
         id: instance.id,
         spriteSheetId: instance.spriteSheetId,
-        sequence,
+        sequences,
         scale: instance.card.controller.getScale(),
         isPlaying: instance.card.controller.isAnimating(),
         position: {
@@ -259,7 +260,7 @@ export class AnimationPreviewManager {
         scene: options.scene,
         x: state.position.x,
         y: state.position.y,
-        sequence: state.sequence,
+        sequences: state.sequences,
         onFocus: options.onFocus,
         onSelectionModeChange: options.onSelectionModeChange,
         onShowSettings: options.onShowSettings,

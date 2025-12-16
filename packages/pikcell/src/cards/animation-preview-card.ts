@@ -2,6 +2,7 @@
  * Animation Preview Card
  *
  * UI for animation preview with controls in the title bar.
+ * Supports multiple animation sequences (rows).
  *
  * Layout:
  * +----------------------------------------+
@@ -10,7 +11,8 @@
  * |          +------------+                |
  * |          |  Preview   |                |
  * |          +------------+                |
- * |         [|][|][|][+]                   |  <- Frame strip (tick bars)
+ * |    [|][|][|][+][++]                    |  <- Row 1: ticks, add frame, add row
+ * |    [X][|][|][+]                        |  <- Row 2+: remove, ticks, add frame
  * +----------------------------------------+
  */
 import * as PIXI from 'pixi.js';
@@ -29,6 +31,7 @@ import {
 import { getTheme, createText } from '../theming/theme';
 import { createPixelButton } from '../components/pixel-button';
 import { SPRITE_CONTROLLER_CONFIG } from '../config/controller-configs';
+import { createConfirmDialog } from '../components/confirm-dialog';
 
 export interface AnimationPreviewCardOptions {
   id: string;
@@ -36,8 +39,8 @@ export interface AnimationPreviewCardOptions {
   y: number;
   renderer: PIXI.Renderer;
   spriteSheetController: SpriteSheetController;
-  initialSequence?: AnimationSequenceConfig;
-  onSequenceChange?: (sequence: AnimationSequenceConfig) => void;
+  initialSequences?: AnimationSequenceConfig[];
+  onSequenceChange?: (sequences: AnimationSequenceConfig[]) => void;
   onClose?: () => void;
   onFocus?: () => void;
   onSelectionModeChange?: (isSelecting: boolean) => void;
@@ -55,6 +58,7 @@ export interface AnimationPreviewCardResult extends CardResult {
   togglePlayback: () => void;
   setSequence: (sequence: AnimationSequenceConfig) => void;
   getSequence: () => AnimationSequenceConfig;
+  getSequences: () => AnimationSequenceConfig[];
   addFrame: (frame: SpriteFrameRef) => void;
   removeFrame: (index: number) => void;
   refresh: () => void;
@@ -62,14 +66,14 @@ export interface AnimationPreviewCardResult extends CardResult {
   setSelectingFrames: (selecting: boolean) => void;
   /** Called when user clicks a cell on sprite sheet while in selection mode */
   handleCellClick: (cellX: number, cellY: number) => void;
-  /** Get frames for highlighting on sprite sheet */
+  /** Get frames for highlighting on sprite sheet (all sequences combined) */
   getFrameCells: () => Array<{ cellX: number; cellY: number }>;
   /** Get current frame index for highlight updates */
   getCurrentFrameIndex: () => number;
 }
 
 /**
- * Creates an animation preview card
+ * Creates an animation preview card with multiple sequence support
  */
 export function createAnimationPreviewCard(options: AnimationPreviewCardOptions): AnimationPreviewCardResult {
   const {
@@ -78,7 +82,7 @@ export function createAnimationPreviewCard(options: AnimationPreviewCardOptions)
     y,
     renderer,
     spriteSheetController,
-    initialSequence,
+    initialSequences,
     onSequenceChange,
     onClose,
     onFocus,
@@ -89,17 +93,26 @@ export function createAnimationPreviewCard(options: AnimationPreviewCardOptions)
 
   const config = ANIMATION_PREVIEW_CARD_CONFIG;
 
-  // State
+  // State - multiple sequences
+  const sequences: AnimationSequenceConfig[] = initialSequences && initialSequences.length > 0
+    ? [...initialSequences]
+    : [createDefaultSequence()];
+  const animControllers: AnimationController[] = [];
+
   let previewSize: number = config.defaultPreviewSize;
-  const sequence = initialSequence ?? createDefaultSequence();
-  let isSelectingFrames = false;
+  let activeRowIndex = 0;
+  let selectingRowIndex = -1; // -1 means no row is in selection mode
   let isPlaying = false;
 
   // Layout calculations
-  // Tick bars are smaller than thumbnails - 8 grid units high + padding
-  const frameStripHeight = 8 + GRID.padding;
+  const rowHeight = 10; // Grid units per row
+  const baseFrameStripHeight = rowHeight + GRID.padding;
+
+  function getContentHeight() {
+    return previewSize + (sequences.length * rowHeight) + GRID.padding * 2;
+  }
+
   const contentWidth = previewSize + GRID.padding * 4;
-  const contentHeight = previewSize + frameStripHeight + GRID.padding * 2;
 
   // Create the managed card
   const managed = createManagedCard({
@@ -107,13 +120,13 @@ export function createAnimationPreviewCard(options: AnimationPreviewCardOptions)
     x,
     y,
     contentWidth,
-    contentHeight,
+    contentHeight: getContentHeight(),
     renderer,
     onFocus,
-    titleBarExtraHeight: 1, // Extra height for playback control buttons
+    titleBarExtraHeight: 1,
     onResize: (newWidth, newHeight) => {
       const availableWidth = newWidth - GRID.padding * 4;
-      const availableHeight = newHeight - frameStripHeight - GRID.padding * 2;
+      const availableHeight = newHeight - (sequences.length * rowHeight) - GRID.padding * 2;
       previewSize = Math.max(
         config.minPreviewSize,
         Math.min(config.maxPreviewSize, Math.min(availableWidth, availableHeight))
@@ -127,21 +140,45 @@ export function createAnimationPreviewCard(options: AnimationPreviewCardOptions)
 
   const { card, contentContainer } = managed;
 
-  // Title bar buttons - layout: [<][|>][>]          [*][X]
-  // Playback controls left-aligned, settings/close right-aligned
-  const btnSize = config.controlButtonSize;
-  const btnSpacing = 1; // Grid units between buttons
-  const cardTotalWidth = contentWidth + GRID.border * 6 + GRID.padding * 2;
-  const btnY = px(GRID.border * 2); // Align with title bar top
+  // Create animation controllers for each sequence
+  function createControllerForSequence(seq: AnimationSequenceConfig, index: number): AnimationController {
+    return new AnimationController({
+      spriteSheetController,
+      sequence: seq,
+      scale: ANIMATION_CONSTANTS.DEFAULT_PREVIEW_SCALE,
+      onFrameChange: (frameIndex, texture) => {
+        if (index === activeRowIndex) {
+          updatePreviewSprite(texture);
+          onFrameChange?.(frameIndex);
+        }
+        redrawFrameStrips();
+      },
+      onPlayStateChange: (playing) => {
+        if (index === activeRowIndex) {
+          isPlaying = playing;
+          updatePlayPauseButton();
+        }
+      }
+    });
+  }
 
-  // Track all title bar buttons for cleanup
+  // Initialize controllers
+  sequences.forEach((seq, i) => {
+    animControllers.push(createControllerForSequence(seq, i));
+  });
+
+  // Title bar buttons
+  const btnSize = config.controlButtonSize;
+  const btnSpacing = 1;
+  const cardTotalWidth = contentWidth + GRID.border * 6 + GRID.padding * 2;
+  const btnY = px(GRID.border * 2);
+
   const titleBarButtons: Array<{ destroy: () => void }> = [];
 
   // === RIGHT-ALIGNED: Settings and Close ===
   const rightEdge = cardTotalWidth - GRID.border * 2 - 1;
   let rightX = rightEdge;
 
-  // Close button [X] (rightmost)
   rightX -= btnSize;
   const closeBtn = createPixelButton({
     size: btnSize,
@@ -154,7 +191,6 @@ export function createAnimationPreviewCard(options: AnimationPreviewCardOptions)
   card.container.addChild(closeBtn.container);
   titleBarButtons.push(closeBtn);
 
-  // Settings button [*]
   rightX -= btnSpacing + btnSize;
   const settingsBtn = createPixelButton({
     size: btnSize,
@@ -170,37 +206,34 @@ export function createAnimationPreviewCard(options: AnimationPreviewCardOptions)
   // === LEFT-ALIGNED: Playback controls ===
   let leftX = GRID.border * 2;
 
-  // Back frame button [<]
   const backBtn = createPixelButton({
     size: btnSize,
     selectionMode: 'press',
     actionMode: 'click',
     label: '<',
     onClick: () => {
-      animController.stepBackward();
+      animControllers[activeRowIndex]?.stepBackward();
     }
   });
   backBtn.container.position.set(px(leftX), btnY);
   card.container.addChild(backBtn.container);
   titleBarButtons.push(backBtn);
 
-  // Play/Pause button [|>] or [||]
   leftX += btnSize + btnSpacing;
-  const playPauseBtnX = leftX; // Store for updatePlayPauseButton
+  const playPauseBtnX = leftX;
   let playPauseBtn = createPixelButton({
     size: btnSize,
     selectionMode: 'press',
     actionMode: 'click',
     label: '|>',
     onClick: () => {
-      animController.togglePlayback();
+      animControllers[activeRowIndex]?.togglePlayback();
     }
   });
   playPauseBtn.container.position.set(px(leftX), btnY);
   card.container.addChild(playPauseBtn.container);
   titleBarButtons.push(playPauseBtn);
 
-  // Forward frame button [>]
   leftX += btnSize + btnSpacing;
   const forwardBtn = createPixelButton({
     size: btnSize,
@@ -208,80 +241,50 @@ export function createAnimationPreviewCard(options: AnimationPreviewCardOptions)
     actionMode: 'click',
     label: '>',
     onClick: () => {
-      animController.stepForward();
+      animControllers[activeRowIndex]?.stepForward();
     }
   });
   forwardBtn.container.position.set(px(leftX), btnY);
   card.container.addChild(forwardBtn.container);
   titleBarButtons.push(forwardBtn);
 
-  /**
-   * Update play/pause button label based on play state
-   */
   function updatePlayPauseButton() {
-    // Remove old button
     card.container.removeChild(playPauseBtn.container);
     playPauseBtn.destroy();
 
-    // Create new button with updated label
     playPauseBtn = createPixelButton({
       size: btnSize,
       selectionMode: 'press',
       actionMode: 'click',
       label: isPlaying ? '||' : '|>',
       onClick: () => {
-        animController.togglePlayback();
+        animControllers[activeRowIndex]?.togglePlayback();
       }
     });
     playPauseBtn.container.position.set(px(playPauseBtnX), btnY);
     card.container.addChild(playPauseBtn.container);
-    // Update the reference in titleBarButtons
     titleBarButtons[3] = playPauseBtn;
   }
 
-  // Animation controller
-  const animController = new AnimationController({
-    spriteSheetController,
-    sequence,
-    scale: ANIMATION_CONSTANTS.DEFAULT_PREVIEW_SCALE,
-    onFrameChange: (frameIndex, texture) => {
-      updatePreviewSprite(texture);
-      redrawFrameStrip();
-      // Notify external listener (e.g., for updating spritesheet highlights)
-      onFrameChange?.(frameIndex);
-    },
-    onPlayStateChange: (playing) => {
-      isPlaying = playing;
-      updatePlayPauseButton();
-    }
-  });
-
   // Containers
   let previewContainer: PIXI.Container = new PIXI.Container();
-  let frameStripContainer: PIXI.Container = new PIXI.Container();
+  let frameStripsContainer: PIXI.Container = new PIXI.Container();
   let previewSprite: PIXI.Sprite | null = null;
 
   contentContainer.addChild(previewContainer);
-  contentContainer.addChild(frameStripContainer);
+  contentContainer.addChild(frameStripsContainer);
 
-  // Make content container interactive to trigger focus on any click
   contentContainer.eventMode = 'static';
   contentContainer.on('pointerdown', () => {
     onFocus?.();
   });
 
-  /**
-   * Update the preview sprite texture
-   */
   function updatePreviewSprite(texture: PIXI.Texture) {
     if (previewSprite) {
       previewSprite.texture = texture;
     }
   }
 
-  /**
-   * Draw the preview area
-   */
   function redrawPreview() {
     previewContainer.removeChildren();
 
@@ -290,16 +293,17 @@ export function createAnimationPreviewCard(options: AnimationPreviewCardOptions)
     const previewSizePx = px(previewSize);
     const scale = Math.floor(previewSizePx / cellSize);
 
-    // Background
     const bg = new PIXI.Graphics();
     bg.roundPixels = true;
     bg.rect(0, 0, previewSizePx, previewSizePx);
     bg.fill({ color: theme.cardTitleBar });
     previewContainer.addChild(bg);
 
-    // Preview sprite
-    const texture = animController.getCurrentFrameTexture();
-    if (texture) {
+    const activeController = animControllers[activeRowIndex];
+    const texture = activeController?.getCurrentFrameTexture();
+    // Check that texture is valid and not empty
+    const hasValidTexture = texture && texture !== PIXI.Texture.EMPTY && texture.source;
+    if (hasValidTexture) {
       previewSprite = new PIXI.Sprite(texture);
       previewSprite.scale.set(scale);
       previewSprite.roundPixels = true;
@@ -310,7 +314,11 @@ export function createAnimationPreviewCard(options: AnimationPreviewCardOptions)
       previewContainer.addChild(previewSprite);
     } else {
       previewSprite = null;
-      const noFramesText = createText('No frames', theme.text);
+      const seq = sequences[activeRowIndex];
+      const noFramesText = createText(
+        seq?.frames?.length > 0 ? 'Loading...' : 'No frames',
+        theme.text
+      );
       noFramesText.position.set(
         (previewSizePx - noFramesText.width) / 2,
         (previewSizePx - noFramesText.height) / 2
@@ -318,7 +326,6 @@ export function createAnimationPreviewCard(options: AnimationPreviewCardOptions)
       previewContainer.addChild(noFramesText);
     }
 
-    // Center preview
     const contentWidthPx = px(contentWidth);
     previewContainer.position.set(
       (contentWidthPx - previewSizePx) / 2,
@@ -327,106 +334,229 @@ export function createAnimationPreviewCard(options: AnimationPreviewCardOptions)
   }
 
   /**
-   * Draw the frame strip with tick bars instead of thumbnails
-   * More compact - allows more frames to fit
+   * Draw a single frame strip row
+   * Layout: [X](non-first) [ticks][+]    [++](first row, right-aligned)
    */
-  function redrawFrameStrip() {
-    frameStripContainer.removeChildren();
-
+  function drawFrameStripRow(
+    container: PIXI.Container,
+    rowIndex: number,
+    yOffset: number
+  ) {
     const theme = getTheme();
-    const frames = sequence.frames;
-    const currentFrameIndex = animController.getCurrentFrameIndex();
+    const seq = sequences[rowIndex];
+    const controller = animControllers[rowIndex];
+    const frames = seq.frames;
+    const currentFrameIndex = controller?.getCurrentFrameIndex() ?? -1;
+    const isActiveRow = rowIndex === activeRowIndex;
+    const isSelectingRow = rowIndex === selectingRowIndex;
+    const isFirstRow = rowIndex === 0;
 
-    // Tick bar dimensions - much smaller than thumbnails
-    const tickWidth = px(2);    // Narrow bar
-    const tickHeight = px(8);   // Short height
-    const tickSpacing = px(1);  // Tight spacing
-    const addBtnSize = config.controlButtonSize;
-    const addBtnSizePx = px(addBtnSize);
-
-    // Calculate strip dimensions
-    const totalTickWidth = frames.length * (tickWidth + tickSpacing);
-    const totalWidth = totalTickWidth + addBtnSizePx + px(2); // + button with gap
-
-    // Center the strip
+    const tickWidth = px(2);
+    const tickHeight = px(8);
+    const tickSpacing = px(1);
+    const btnSize = config.controlButtonSize;
+    const btnSizePx = px(btnSize);
+    const margin = px(2);
     const contentWidthPx = px(contentWidth);
-    const startX = (contentWidthPx - totalWidth) / 2;
+    const rowHeightPx = px(rowHeight);
 
-    // Frame tick bars
+    // Draw active row background
+    if (isActiveRow) {
+      const rowBg = new PIXI.Graphics();
+      rowBg.roundPixels = true;
+      rowBg.rect(0, yOffset - px(1), contentWidthPx, rowHeightPx);
+      rowBg.fill({ color: theme.cardBorder, alpha: 0.15 });
+      container.addChild(rowBg);
+    }
+
+    // Calculate layout - start with left margin
+    let rowStartX = margin;
+
+    // Add [X] button for non-first rows (left-aligned with margin)
+    if (!isFirstRow) {
+      const removeBtn = createPixelButton({
+        size: btnSize,
+        selectionMode: 'press',
+        actionMode: 'click',
+        label: 'X',
+        onClick: () => {
+          // Show confirmation dialog
+          const dialog = createConfirmDialog({
+            title: 'Remove Animation',
+            message: `Remove animation row ${rowIndex + 1}?`,
+            onConfirm: () => {
+              removeRow(rowIndex);
+            },
+            renderer
+          });
+          card.container.parent?.addChild(dialog.container);
+        }
+      });
+      managed.trackChild(removeBtn);
+      removeBtn.container.position.set(rowStartX, yOffset + (tickHeight - btnSizePx) / 2);
+      container.addChild(removeBtn.container);
+      rowStartX += btnSizePx + margin;
+    }
+
+    // Draw tick bars
     frames.forEach((frameRef, index) => {
-      const tickX = startX + index * (tickWidth + tickSpacing);
+      const tickX = rowStartX + index * (tickWidth + tickSpacing);
 
       const tickBar = new PIXI.Graphics();
       tickBar.roundPixels = true;
       tickBar.eventMode = 'static';
       tickBar.cursor = 'pointer';
 
-      // Current frame gets accent color, others get muted color
-      const isCurrentFrame = index === currentFrameIndex;
-      const barColor = isCurrentFrame ? theme.accent : theme.cardBorder;
-      const barAlpha = isCurrentFrame ? 1.0 : 0.6;
+      const isCurrentFrame = index === currentFrameIndex && isActiveRow;
+      const barColor = isCurrentFrame ? theme.accent : (isActiveRow ? theme.cardBorder : 0x555555);
+      const barAlpha = isCurrentFrame ? 1.0 : (isActiveRow ? 0.6 : 0.4);
 
-      // Draw the tick bar
-      tickBar.roundRect(tickX, 0, tickWidth, tickHeight, 1);
+      tickBar.roundRect(tickX, yOffset, tickWidth, tickHeight, 1);
       tickBar.fill({ color: barColor, alpha: barAlpha });
 
-      // Add subtle border for visibility
       if (isCurrentFrame) {
-        tickBar.roundRect(tickX, 0, tickWidth, tickHeight, 1);
+        tickBar.roundRect(tickX, yOffset, tickWidth, tickHeight, 1);
         tickBar.stroke({ color: 0xffffff, width: 1, alpha: 0.3 });
       }
 
-      frameStripContainer.addChild(tickBar);
+      container.addChild(tickBar);
 
-      // Click to select frame
       tickBar.on('pointerdown', (e: PIXI.FederatedPointerEvent) => {
         onFocus?.();
-        animController.goToFrame(index);
+        setActiveRow(rowIndex);
+        controller?.goToFrame(index);
         e.stopPropagation();
       });
 
-      // Right-click to remove
       tickBar.on('rightclick', (e: PIXI.FederatedPointerEvent) => {
         onFocus?.();
-        animController.removeFrame(index);
-        onSequenceChange?.(sequence);
+        setActiveRow(rowIndex);
+        controller?.removeFrame(index);
+        onSequenceChange?.(sequences);
         redrawContent();
         e.stopPropagation();
       });
     });
 
-    // Add/Select frame button [+] - toggles selection mode
-    const addX = startX + frames.length * (tickWidth + tickSpacing) + px(1);
+    // Add frame button [+] after tick bars
+    const addX = rowStartX + frames.length * (tickWidth + tickSpacing) + px(1);
     const addBtn = createPixelButton({
-      size: addBtnSize,
+      size: btnSize,
       selectionMode: 'press',
       actionMode: 'toggle',
-      selected: isSelectingFrames,
+      selected: isSelectingRow,
       label: '+',
       onClick: () => {
-        isSelectingFrames = !isSelectingFrames;
-        onSelectionModeChange?.(isSelectingFrames);
-        redrawFrameStrip();
+        if (selectingRowIndex === rowIndex) {
+          // Turn off selection mode
+          selectingRowIndex = -1;
+          onSelectionModeChange?.(false);
+        } else {
+          // Turn on selection mode for this row
+          selectingRowIndex = rowIndex;
+          setActiveRow(rowIndex);
+          onSelectionModeChange?.(true);
+        }
+        redrawFrameStrips();
       }
     });
     managed.trackChild(addBtn);
-    // Vertically center the button relative to ticks
-    const addBtnY = (tickHeight - addBtnSizePx) / 2;
-    addBtn.container.position.set(addX, addBtnY);
-    frameStripContainer.addChild(addBtn.container);
+    addBtn.container.position.set(addX, yOffset + (tickHeight - btnSizePx) / 2);
+    container.addChild(addBtn.container);
 
-    // Position strip below preview with less vertical space
-    const previewSizePx = px(previewSize);
-    frameStripContainer.position.set(0, px(GRID.padding) + previewSizePx + px(1));
+    // Add row button [++] only on first row - RIGHT ALIGNED with margin
+    if (isFirstRow) {
+      const addRowX = contentWidthPx - btnSizePx - margin;
+      const addRowBtn = createPixelButton({
+        size: btnSize,
+        selectionMode: 'press',
+        actionMode: 'click',
+        label: '++',
+        onClick: () => {
+          addRow();
+        }
+      });
+      managed.trackChild(addRowBtn);
+      addRowBtn.container.position.set(addRowX, yOffset + (tickHeight - btnSizePx) / 2);
+      container.addChild(addRowBtn.container);
+    }
   }
 
-  /**
-   * Redraw all content
-   */
-  function redrawContent() {
+  function redrawFrameStrips() {
+    frameStripsContainer.removeChildren();
     managed.clearChildren();
+
+    const previewSizePx = px(previewSize);
+    const startY = px(GRID.padding) + previewSizePx + px(2);
+
+    sequences.forEach((_, rowIndex) => {
+      const yOffset = startY + rowIndex * px(rowHeight);
+      drawFrameStripRow(frameStripsContainer, rowIndex, yOffset - startY);
+    });
+
+    frameStripsContainer.position.set(0, startY);
+  }
+
+  function addRow() {
+    if (sequences.length >= ANIMATION_CONSTANTS.MAX_FRAMES_PER_SEQUENCE) return;
+
+    const newSeq = createDefaultSequence();
+    sequences.push(newSeq);
+
+    const newController = createControllerForSequence(newSeq, sequences.length - 1);
+    animControllers.push(newController);
+
+    // Update card size
+    updateCardSize();
+    onSequenceChange?.(sequences);
+    redrawContent();
+  }
+
+  function removeRow(rowIndex: number) {
+    if (rowIndex === 0 || rowIndex >= sequences.length) return;
+
+    // Clean up controller
+    animControllers[rowIndex]?.destroy();
+    animControllers.splice(rowIndex, 1);
+    sequences.splice(rowIndex, 1);
+
+    // Adjust active row if needed
+    if (activeRowIndex >= sequences.length) {
+      activeRowIndex = sequences.length - 1;
+    }
+    if (selectingRowIndex === rowIndex) {
+      selectingRowIndex = -1;
+      onSelectionModeChange?.(false);
+    } else if (selectingRowIndex > rowIndex) {
+      selectingRowIndex--;
+    }
+
+    // Update card size
+    updateCardSize();
+    onSequenceChange?.(sequences);
+    redrawContent();
+  }
+
+  function setActiveRow(index: number) {
+    if (index < 0 || index >= sequences.length) return;
+
+    // Pause previous active controller
+    animControllers[activeRowIndex]?.pause();
+
+    activeRowIndex = index;
+    isPlaying = animControllers[activeRowIndex]?.isAnimating() ?? false;
+    updatePlayPauseButton();
+    redrawContent();
+  }
+
+  function updateCardSize() {
+    const newHeight = getContentHeight();
+    card.setContentSize(contentWidth, newHeight);
+  }
+
+  function redrawContent() {
     redrawPreview();
-    redrawFrameStrip();
+    redrawFrameStrips();
   }
 
   // Initial draw
@@ -436,79 +566,93 @@ export function createAnimationPreviewCard(options: AnimationPreviewCardOptions)
     id,
     card,
     container: card.container,
-    controller: animController,
+    controller: animControllers[0], // Return first controller for backwards compatibility
 
-    play: () => animController.play(),
-    pause: () => animController.pause(),
-    stop: () => animController.stop(),
-    togglePlayback: () => animController.togglePlayback(),
+    play: () => animControllers[activeRowIndex]?.play(),
+    pause: () => animControllers[activeRowIndex]?.pause(),
+    stop: () => animControllers[activeRowIndex]?.stop(),
+    togglePlayback: () => animControllers[activeRowIndex]?.togglePlayback(),
 
     setSequence: (newSequence: AnimationSequenceConfig) => {
-      Object.assign(sequence, newSequence);
-      animController.setSequence(sequence);
+      Object.assign(sequences[activeRowIndex], newSequence);
+      animControllers[activeRowIndex]?.setSequence(sequences[activeRowIndex]);
       redrawContent();
     },
 
-    getSequence: () => animController.getSequence(),
+    getSequence: () => animControllers[activeRowIndex]?.getSequence() ?? sequences[activeRowIndex],
+
+    getSequences: () => sequences.map((_, i) => animControllers[i]?.getSequence() ?? sequences[i]),
 
     addFrame: (frame: SpriteFrameRef) => {
-      animController.addFrame(frame);
-      onSequenceChange?.(sequence);
+      animControllers[activeRowIndex]?.addFrame(frame);
+      onSequenceChange?.(sequences);
       redrawContent();
     },
 
     removeFrame: (index: number) => {
-      animController.removeFrame(index);
-      onSequenceChange?.(sequence);
+      animControllers[activeRowIndex]?.removeFrame(index);
+      onSequenceChange?.(sequences);
       redrawContent();
     },
 
     refresh: () => {
-      animController.onSpriteSheetUpdate();
+      animControllers.forEach(c => c.onSpriteSheetUpdate());
       redrawContent();
     },
 
-    isSelectingFrames: () => isSelectingFrames,
+    isSelectingFrames: () => selectingRowIndex >= 0,
 
     setSelectingFrames: (selecting: boolean) => {
-      isSelectingFrames = selecting;
-      onSelectionModeChange?.(isSelectingFrames);
-      redrawFrameStrip();
+      if (selecting) {
+        selectingRowIndex = activeRowIndex;
+      } else {
+        selectingRowIndex = -1;
+      }
+      onSelectionModeChange?.(selecting);
+      redrawFrameStrips();
     },
 
     handleCellClick: (cellX: number, cellY: number) => {
-      if (!isSelectingFrames) return;
+      if (selectingRowIndex < 0) return;
 
-      // Check if this cell is already in the sequence
-      const existingIndex = sequence.frames.findIndex(
+      const seq = sequences[selectingRowIndex];
+      const controller = animControllers[selectingRowIndex];
+
+      const existingIndex = seq.frames.findIndex(
         f => f.cellX === cellX && f.cellY === cellY
       );
 
       if (existingIndex >= 0) {
-        // Remove this frame
-        animController.removeFrame(existingIndex);
+        controller?.removeFrame(existingIndex);
       } else {
-        // Add this frame
-        animController.addFrame({ cellX, cellY });
+        controller?.addFrame({ cellX, cellY });
       }
 
-      onSequenceChange?.(sequence);
+      onSequenceChange?.(sequences);
       redrawContent();
     },
 
     getFrameCells: () => {
-      return sequence.frames.map(f => ({ cellX: f.cellX, cellY: f.cellY }));
+      // Return all frames from all sequences for highlighting
+      const allFrames: Array<{ cellX: number; cellY: number }> = [];
+      sequences.forEach(seq => {
+        seq.frames.forEach(f => {
+          if (!allFrames.some(af => af.cellX === f.cellX && af.cellY === f.cellY)) {
+            allFrames.push({ cellX: f.cellX, cellY: f.cellY });
+          }
+        });
+      });
+      return allFrames;
     },
-    getCurrentFrameIndex: () => animController.getCurrentFrameIndex(),
+
+    getCurrentFrameIndex: () => animControllers[activeRowIndex]?.getCurrentFrameIndex() ?? 0,
 
     destroy: () => {
-      // Exit selection mode on destroy
-      if (isSelectingFrames) {
-        isSelectingFrames = false;
+      if (selectingRowIndex >= 0) {
+        selectingRowIndex = -1;
         onSelectionModeChange?.(false);
       }
-      animController.destroy();
-      // Clean up all title bar buttons
+      animControllers.forEach(c => c.destroy());
       titleBarButtons.forEach(btn => btn.destroy());
       managed.destroy();
     }
