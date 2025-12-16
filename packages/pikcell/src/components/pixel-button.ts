@@ -51,6 +51,8 @@ export interface PixelButtonOptions {
   selectionMode?: SelectionMode;  // 'highlight' for swatches, 'press' for tool buttons (visual appearance)
   actionMode?: ActionMode;        // 'click' for simple click, 'toggle' for toggleable state (behavior)
   tooltip?: string;       // Optional tooltip text
+  /** Optional callback to trigger when button is clicked (before onClick, useful for focus) */
+  onFocus?: () => void;
   /** Enable pixel explosion effect on click/toggle */
   explodeEffect?: boolean;
   /** Scene container for explosion particles (required if explodeEffect is true) */
@@ -101,6 +103,7 @@ export function createPixelButton(options: PixelButtonOptions): PixelButtonResul
     selectionMode = 'press',
     actionMode = 'click',
     tooltip,
+    onFocus,
     explodeEffect = false,
     explodeScene,
     explodeScreenHeight = 800,
@@ -393,6 +396,8 @@ export function createPixelButton(options: PixelButtonOptions): PixelButtonResul
   // Add click handler if provided
   if (onClick) {
     button.on('pointerdown', (e: PIXI.FederatedPointerEvent) => {
+      // Trigger focus callback first (e.g., for card focus)
+      onFocus?.();
       // Trigger explosion if enabled and not already exploding
       if (explodeEffect && explodeScene && !isExploding) {
         triggerExplosion();

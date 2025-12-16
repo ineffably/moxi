@@ -54,6 +54,8 @@ export class SpriteSheetController {
   private animationFrameHighlights: Array<{ cellX: number; cellY: number }> = [];
   private animationFrameLabels: PIXI.Text[] = [];
   private currentAnimationFrameIndex: number = -1;
+  // Selection mode - when active, shows overlay to indicate cells can be selected for animation
+  private selectionModeActive: boolean = false;
   private isDragging: boolean = false;
   private dragStartX: number = 0;
   private dragStartY: number = 0;
@@ -359,6 +361,19 @@ export class SpriteSheetController {
     // Sprite has anchor (0.5, 0.5), so adjust for centered origin
     const spriteX = this.sprite.x - (this.config.width * this.scale) / 2;
     const spriteY = this.sprite.y - (this.config.height * this.scale) / 2;
+    const spriteWidth = this.config.width * this.scale;
+    const spriteHeight = this.config.height * this.scale;
+
+    // Draw selection mode overlay (semi-transparent tint over entire sprite)
+    if (this.selectionModeActive) {
+      // Draw a cyan/teal tinted overlay to indicate selection mode
+      this.cellOverlay.rect(spriteX, spriteY, spriteWidth, spriteHeight);
+      this.cellOverlay.fill({ color: 0x00ffff, alpha: 0.15 });
+
+      // Draw a border around the sprite to make selection mode obvious
+      this.cellOverlay.rect(spriteX, spriteY, spriteWidth, spriteHeight);
+      this.cellOverlay.stroke({ color: 0x00ffff, width: 2, alpha: 0.8 });
+    }
 
     // Draw animation frame highlights first (behind everything)
     if (this.animationFrameHighlights.length > 0) {
@@ -705,6 +720,41 @@ export class SpriteSheetController {
    */
   public getAnimationFrameHighlights(): Array<{ cellX: number; cellY: number }> {
     return this.animationFrameHighlights;
+  }
+
+  /**
+   * Set selection mode active state
+   * When active, shows a colored overlay to indicate cells can be selected for animation
+   */
+  public setSelectionMode(active: boolean): void {
+    this.selectionModeActive = active;
+    this.drawCellOverlay();
+  }
+
+  /**
+   * Get current selection mode state
+   */
+  public isSelectionModeActive(): boolean {
+    return this.selectionModeActive;
+  }
+
+  /**
+   * Set a hovered animation frame cell (for external hover events like animation tick bars)
+   * This will highlight the cell as if it were being hovered
+   */
+  public setHoveredAnimationFrame(cellX: number, cellY: number): void {
+    this.hoveredCellX = cellX;
+    this.hoveredCellY = cellY;
+    this.drawCellOverlay();
+  }
+
+  /**
+   * Clear the hovered animation frame cell
+   */
+  public clearHoveredAnimationFrame(): void {
+    this.hoveredCellX = -1;
+    this.hoveredCellY = -1;
+    this.drawCellOverlay();
   }
 
   /**

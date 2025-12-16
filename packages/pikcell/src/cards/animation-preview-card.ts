@@ -18,6 +18,7 @@
 import * as PIXI from 'pixi.js';
 import { GRID, px } from '@moxijs/ui';
 import { createManagedCard } from '../utilities/managed-card';
+import { createCardZoomHandler } from '../utilities/card-zoom-handler';
 import { CardResult } from '../interfaces/components';
 import { ANIMATION_PREVIEW_CARD_CONFIG } from '../config/card-configs';
 import { ANIMATION_CONSTANTS } from '../config/constants';
@@ -47,6 +48,10 @@ export interface AnimationPreviewCardOptions {
   onShowSettings?: () => void;
   /** Called when current frame changes during playback */
   onFrameChange?: (frameIndex: number) => void;
+  /** Called when hovering over a frame tick bar (for spritesheet highlight) */
+  onFrameHover?: (frameIndex: number, cellX: number, cellY: number) => void;
+  /** Called when mouse leaves frame tick bars */
+  onFrameHoverEnd?: () => void;
 }
 
 export interface AnimationPreviewCardResult extends CardResult {
@@ -88,7 +93,9 @@ export function createAnimationPreviewCard(options: AnimationPreviewCardOptions)
     onFocus,
     onSelectionModeChange,
     onShowSettings,
-    onFrameChange
+    onFrameChange,
+    onFrameHover,
+    onFrameHoverEnd
   } = options;
 
   const config = ANIMATION_PREVIEW_CARD_CONFIG;
@@ -114,6 +121,19 @@ export function createAnimationPreviewCard(options: AnimationPreviewCardOptions)
 
   const contentWidth = previewSize + GRID.padding * 4;
 
+  // Calculate minimum content width based on title bar controls
+  // Left: 3 buttons + 2 spacings, Right: 2 buttons + 1 spacing, plus gap
+  const btnSize = config.controlButtonSize;
+  const btnSpacing = 1;
+  const leftControlsWidth = 3 * btnSize + 2 * btnSpacing;  // 26 with btnSize=8
+  const rightControlsWidth = 2 * btnSize + 1 * btnSpacing; // 17 with btnSize=8
+  const minGap = 2;
+  // Title bar needs: leftControls + gap + rightControls, minus border offsets
+  const minTitleBarWidth = leftControlsWidth + minGap + rightControlsWidth;
+  // Convert to content width (account for card borders/padding)
+  const minContentWidth = minTitleBarWidth - GRID.border * 2 - GRID.padding * 2;
+  const minContentHeight = config.minPreviewSize + rowHeight + GRID.padding * 2;
+
   // Create the managed card
   const managed = createManagedCard({
     title: '',
@@ -121,6 +141,8 @@ export function createAnimationPreviewCard(options: AnimationPreviewCardOptions)
     y,
     contentWidth,
     contentHeight: getContentHeight(),
+    minContentWidth,
+    minContentHeight,
     renderer,
     onFocus,
     titleBarExtraHeight: 1,
@@ -131,14 +153,117 @@ export function createAnimationPreviewCard(options: AnimationPreviewCardOptions)
         config.minPreviewSize,
         Math.min(config.maxPreviewSize, Math.min(availableWidth, availableHeight))
       );
+      addTitleBarButtons();
       redrawContent();
     },
     onRefresh: () => {
+      addTitleBarButtons();
       redrawContent();
     }
   });
 
   const { card, contentContainer } = managed;
+
+  // Title bar button references (recreated on resize)
+  const titleBarButtons: Array<{ destroy: () => void }> = [];
+  let playPauseBtn: ReturnType<typeof createPixelButton>;
+
+  /**
+   * Creates/recreates title bar buttons after card resize
+   */
+  function addTitleBarButtons() {
+    // Clean up existing buttons
+    titleBarButtons.forEach(btn => {
+      if (btn.destroy) btn.destroy();
+    });
+    titleBarButtons.length = 0;
+
+    const btnSize = config.controlButtonSize;
+    const btnSpacing = 1;
+    const cardTotalWidth = contentWidth + GRID.border * 6 + GRID.padding * 2;
+    const btnY = px(GRID.border * 2);
+
+    // === RIGHT-ALIGNED: Settings and Close ===
+    const rightEdge = cardTotalWidth - GRID.border * 2 - 1;
+    let rightX = rightEdge;
+
+    rightX -= btnSize;
+    const closeBtn = createPixelButton({
+      size: btnSize,
+      selectionMode: 'press',
+      actionMode: 'click',
+      label: 'X',
+      onFocus,
+      onClick: () => {
+        onClose?.();
+      }
+    });
+    closeBtn.container.position.set(px(rightX), btnY);
+    card.container.addChild(closeBtn.container);
+    titleBarButtons.push(closeBtn);
+
+    rightX -= btnSpacing + btnSize;
+    const settingsBtn = createPixelButton({
+      size: btnSize,
+      selectionMode: 'press',
+      actionMode: 'click',
+      label: '*',
+      onFocus,
+      onClick: () => {
+        onShowSettings?.();
+      }
+    });
+    settingsBtn.container.position.set(px(rightX), btnY);
+    card.container.addChild(settingsBtn.container);
+    titleBarButtons.push(settingsBtn);
+
+    // === LEFT-ALIGNED: Playback controls ===
+    let leftX = GRID.border * 2;
+
+    const backBtn = createPixelButton({
+      size: btnSize,
+      selectionMode: 'press',
+      actionMode: 'click',
+      label: '<',
+      onFocus,
+      onClick: () => {
+        animControllers[activeRowIndex]?.stepBackward();
+      }
+    });
+    backBtn.container.position.set(px(leftX), btnY);
+    card.container.addChild(backBtn.container);
+    titleBarButtons.push(backBtn);
+
+    leftX += btnSize + btnSpacing;
+    playPauseBtn = createPixelButton({
+      size: btnSize,
+      selectionMode: 'press',
+      actionMode: 'click',
+      label: isPlaying ? '||' : '|>',
+      onFocus,
+      onClick: () => {
+        animControllers[activeRowIndex]?.togglePlayback();
+      }
+    });
+    playPauseBtn.container.position.set(px(leftX), btnY);
+    card.container.addChild(playPauseBtn.container);
+    titleBarButtons.push(playPauseBtn);
+
+    leftX += btnSize + btnSpacing;
+    const forwardBtn = createPixelButton({
+      size: btnSize,
+      selectionMode: 'press',
+      actionMode: 'click',
+      label: '>',
+      onFocus,
+      onClick: () => {
+        animControllers[activeRowIndex]?.stepForward();
+      }
+    });
+    forwardBtn.container.position.set(px(leftX), btnY);
+    card.container.addChild(forwardBtn.container);
+    titleBarButtons.push(forwardBtn);
+  }
 
   // Create animation controllers for each sequence
   function createControllerForSequence(seq: AnimationSequenceConfig, index: number): AnimationController {
@@ -167,103 +292,12 @@ export function createAnimationPreviewCard(options: AnimationPreviewCardOptions)
     animControllers.push(createControllerForSequence(seq, i));
   });
 
-  // Title bar buttons
-  const btnSize = config.controlButtonSize;
-  const btnSpacing = 1;
-  const cardTotalWidth = contentWidth + GRID.border * 6 + GRID.padding * 2;
-  const btnY = px(GRID.border * 2);
-
-  const titleBarButtons: Array<{ destroy: () => void }> = [];
-
-  // === RIGHT-ALIGNED: Settings and Close ===
-  const rightEdge = cardTotalWidth - GRID.border * 2 - 1;
-  let rightX = rightEdge;
-
-  rightX -= btnSize;
-  const closeBtn = createPixelButton({
-    size: btnSize,
-    selectionMode: 'press',
-    actionMode: 'click',
-    label: 'X',
-    onClick: () => onClose?.()
-  });
-  closeBtn.container.position.set(px(rightX), btnY);
-  card.container.addChild(closeBtn.container);
-  titleBarButtons.push(closeBtn);
-
-  rightX -= btnSpacing + btnSize;
-  const settingsBtn = createPixelButton({
-    size: btnSize,
-    selectionMode: 'press',
-    actionMode: 'click',
-    label: '*',
-    onClick: () => onShowSettings?.()
-  });
-  settingsBtn.container.position.set(px(rightX), btnY);
-  card.container.addChild(settingsBtn.container);
-  titleBarButtons.push(settingsBtn);
-
-  // === LEFT-ALIGNED: Playback controls ===
-  let leftX = GRID.border * 2;
-
-  const backBtn = createPixelButton({
-    size: btnSize,
-    selectionMode: 'press',
-    actionMode: 'click',
-    label: '<',
-    onClick: () => {
-      animControllers[activeRowIndex]?.stepBackward();
-    }
-  });
-  backBtn.container.position.set(px(leftX), btnY);
-  card.container.addChild(backBtn.container);
-  titleBarButtons.push(backBtn);
-
-  leftX += btnSize + btnSpacing;
-  const playPauseBtnX = leftX;
-  let playPauseBtn = createPixelButton({
-    size: btnSize,
-    selectionMode: 'press',
-    actionMode: 'click',
-    label: '|>',
-    onClick: () => {
-      animControllers[activeRowIndex]?.togglePlayback();
-    }
-  });
-  playPauseBtn.container.position.set(px(leftX), btnY);
-  card.container.addChild(playPauseBtn.container);
-  titleBarButtons.push(playPauseBtn);
-
-  leftX += btnSize + btnSpacing;
-  const forwardBtn = createPixelButton({
-    size: btnSize,
-    selectionMode: 'press',
-    actionMode: 'click',
-    label: '>',
-    onClick: () => {
-      animControllers[activeRowIndex]?.stepForward();
-    }
-  });
-  forwardBtn.container.position.set(px(leftX), btnY);
-  card.container.addChild(forwardBtn.container);
-  titleBarButtons.push(forwardBtn);
+  // Initial title bar buttons
+  addTitleBarButtons();
 
   function updatePlayPauseButton() {
-    card.container.removeChild(playPauseBtn.container);
-    playPauseBtn.destroy();
-
-    playPauseBtn = createPixelButton({
-      size: btnSize,
-      selectionMode: 'press',
-      actionMode: 'click',
-      label: isPlaying ? '||' : '|>',
-      onClick: () => {
-        animControllers[activeRowIndex]?.togglePlayback();
-      }
-    });
-    playPauseBtn.container.position.set(px(playPauseBtnX), btnY);
-    card.container.addChild(playPauseBtn.container);
-    titleBarButtons[3] = playPauseBtn;
+    // Recreate all title bar buttons with updated state
+    addTitleBarButtons();
   }
 
   // Containers
@@ -273,11 +307,6 @@ export function createAnimationPreviewCard(options: AnimationPreviewCardOptions)
 
   contentContainer.addChild(previewContainer);
   contentContainer.addChild(frameStripsContainer);
-
-  contentContainer.eventMode = 'static';
-  contentContainer.on('pointerdown', () => {
-    onFocus?.();
-  });
 
   function updatePreviewSprite(texture: PIXI.Texture) {
     if (previewSprite) {
@@ -373,12 +402,15 @@ export function createAnimationPreviewCard(options: AnimationPreviewCardOptions)
     let rowStartX = margin;
 
     // Add [X] button for non-first rows (left-aligned with margin)
+    // For first row, add equivalent spacing so tick bars align
     if (!isFirstRow) {
       const removeBtn = createPixelButton({
         size: btnSize,
         selectionMode: 'press',
         actionMode: 'click',
         label: 'X',
+        backgroundColor: 0x882222, // Red tint for delete
+        onFocus,
         onClick: () => {
           // Show confirmation dialog
           const dialog = createConfirmDialog({
@@ -395,8 +427,9 @@ export function createAnimationPreviewCard(options: AnimationPreviewCardOptions)
       managed.trackChild(removeBtn);
       removeBtn.container.position.set(rowStartX, yOffset + (tickHeight - btnSizePx) / 2);
       container.addChild(removeBtn.container);
-      rowStartX += btnSizePx + margin;
     }
+    // Always add button width + margin to align tick bars across all rows
+    rowStartX += btnSizePx + margin;
 
     // Draw tick bars
     frames.forEach((frameRef, index) => {
@@ -436,6 +469,15 @@ export function createAnimationPreviewCard(options: AnimationPreviewCardOptions)
         redrawContent();
         e.stopPropagation();
       });
+
+      // Hover handlers for spritesheet cell highlighting
+      tickBar.on('pointerover', () => {
+        onFrameHover?.(index, frameRef.cellX, frameRef.cellY);
+      });
+
+      tickBar.on('pointerout', () => {
+        onFrameHoverEnd?.();
+      });
     });
 
     // Add frame button [+] after tick bars
@@ -446,6 +488,7 @@ export function createAnimationPreviewCard(options: AnimationPreviewCardOptions)
       actionMode: 'toggle',
       selected: isSelectingRow,
       label: '+',
+      onFocus,
       onClick: () => {
         if (selectingRowIndex === rowIndex) {
           // Turn off selection mode
@@ -472,6 +515,7 @@ export function createAnimationPreviewCard(options: AnimationPreviewCardOptions)
         selectionMode: 'press',
         actionMode: 'click',
         label: '++',
+        onFocus,
         onClick: () => {
           addRow();
         }
@@ -562,6 +606,29 @@ export function createAnimationPreviewCard(options: AnimationPreviewCardOptions)
   // Initial draw
   redrawContent();
 
+  // Mouse wheel zoom for preview size (height changes, width stays same)
+  const wheelHandler = createCardZoomHandler(renderer, card, (delta) => {
+    const newPreviewSize = Math.max(
+      config.minPreviewSize,
+      Math.min(config.maxPreviewSize, previewSize + delta * 2)
+    );
+
+    if (newPreviewSize !== previewSize) {
+      previewSize = newPreviewSize;
+
+      // Update card height (width stays the same)
+      const newHeight = getContentHeight();
+      card.setContentSize(contentWidth, newHeight);
+
+      addTitleBarButtons();
+      redrawContent();
+    }
+  });
+
+  if (typeof window !== 'undefined') {
+    managed.addEventListenerTracked(window, 'wheel', wheelHandler, { passive: false });
+  }
+
   return {
     id,
     card,
@@ -626,6 +693,9 @@ export function createAnimationPreviewCard(options: AnimationPreviewCardOptions)
         controller?.removeFrame(existingIndex);
       } else {
         controller?.addFrame({ cellX, cellY });
+        // Go to the newly added frame (it's now at the end)
+        const newFrameIndex = seq.frames.length - 1;
+        controller?.goToFrame(newFrameIndex);
       }
 
       onSequenceChange?.(sequences);

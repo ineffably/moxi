@@ -1057,78 +1057,152 @@ export class SpriteEditor {
   }
 
   /**
-   * Handle copy operation - copy selected pixels to clipboard
+   * Handle copy operation - copy selected pixels or cell to clipboard
    */
   private handleCopy(): void {
     const activeInstance = this.spriteSheetManager.getActive();
-    if (!activeInstance?.spriteCard || !activeInstance.spriteController) return;
+    if (!activeInstance) return;
 
-    const selection = activeInstance.spriteCard.getSelection();
-    if (!selection) return;
+    // First try: copy pixel selection from sprite editor
+    if (activeInstance.spriteCard && activeInstance.spriteController) {
+      const selection = activeInstance.spriteCard.getSelection();
+      if (selection) {
+        const { minX, minY, maxX, maxY } = this.getNormalizedSelection(selection);
+        const width = maxX - minX + 1;
+        const height = maxY - minY + 1;
 
-    const { minX, minY, maxX, maxY } = this.getNormalizedSelection(selection);
-    const width = maxX - minX + 1;
-    const height = maxY - minY + 1;
+        // Copy pixels from selection
+        const pixels: number[][] = [];
+        for (let y = 0; y < height; y++) {
+          const row: number[] = [];
+          for (let x = 0; x < width; x++) {
+            row.push(activeInstance.spriteController.getPixel(minX + x, minY + y));
+          }
+          pixels.push(row);
+        }
 
-    // Copy pixels from selection
-    const pixels: number[][] = [];
-    for (let y = 0; y < height; y++) {
-      const row: number[] = [];
-      for (let x = 0; x < width; x++) {
-        row.push(activeInstance.spriteController.getPixel(minX + x, minY + y));
+        this.clipboard = { width, height, pixels };
+        console.log(`Copied ${width}x${height} pixels to clipboard`);
+        return;
       }
-      pixels.push(row);
     }
 
-    this.clipboard = { width, height, pixels };
-    console.log(`Copied ${width}x${height} pixels to clipboard`);
+    // Second try: copy cell from spritesheet
+    if (activeInstance.sheetCard) {
+      const selectedCell = activeInstance.sheetCard.controller.getSelectedCell();
+      if (selectedCell.x >= 0 && selectedCell.y >= 0) {
+        const cellSize = 8; // 8x8 cell
+        const startX = selectedCell.x * cellSize;
+        const startY = selectedCell.y * cellSize;
+
+        // Copy pixels from cell
+        const pixels: number[][] = [];
+        for (let y = 0; y < cellSize; y++) {
+          const row: number[] = [];
+          for (let x = 0; x < cellSize; x++) {
+            row.push(activeInstance.sheetCard.controller.getPixel(startX + x, startY + y));
+          }
+          pixels.push(row);
+        }
+
+        this.clipboard = { width: cellSize, height: cellSize, pixels };
+        console.log(`Copied cell (${selectedCell.x}, ${selectedCell.y}) to clipboard`);
+      }
+    }
   }
 
   /**
-   * Handle paste operation - paste clipboard at selection or origin
+   * Handle paste operation - paste clipboard at selection, cell, or origin
    */
   private handlePaste(): void {
     if (!this.clipboard) return;
 
     const activeInstance = this.spriteSheetManager.getActive();
-    if (!activeInstance?.spriteCard || !activeInstance.spriteController) return;
+    if (!activeInstance) return;
 
-    const selection = activeInstance.spriteCard.getSelection();
+    // First try: paste to pixel selection in sprite editor
+    if (activeInstance.spriteCard && activeInstance.spriteController) {
+      const selection = activeInstance.spriteCard.getSelection();
+      if (selection) {
+        const startX = Math.min(selection.x1, selection.x2);
+        const startY = Math.min(selection.y1, selection.y2);
 
-    // Paste at selection top-left, or at origin if no selection
-    const startX = selection ? Math.min(selection.x1, selection.x2) : 0;
-    const startY = selection ? Math.min(selection.y1, selection.y2) : 0;
+        // Begin undo stroke
+        this.undoManager.beginStroke(activeInstance.id);
 
-    // Begin undo stroke
-    this.undoManager.beginStroke(activeInstance.id);
+        // Paste pixels (index 0 is transparent - don't overwrite destination)
+        for (let y = 0; y < this.clipboard.height; y++) {
+          for (let x = 0; x < this.clipboard.width; x++) {
+            const destX = startX + x;
+            const destY = startY + y;
 
-    // Paste pixels (index 0 is transparent - don't overwrite destination)
-    for (let y = 0; y < this.clipboard.height; y++) {
-      for (let x = 0; x < this.clipboard.width; x++) {
-        const destX = startX + x;
-        const destY = startY + y;
+            // Skip if out of bounds (8x8 sprite editor)
+            if (destX < 0 || destX >= 8 || destY < 0 || destY >= 8) continue;
 
-        // Skip if out of bounds
-        if (destX < 0 || destX >= 8 || destY < 0 || destY >= 8) continue;
+            const newColorIndex = this.clipboard.pixels[y][x];
 
-        const newColorIndex = this.clipboard.pixels[y][x];
+            // Skip transparent pixels (index 0) - they don't overwrite
+            if (newColorIndex === 0) continue;
 
-        // Skip transparent pixels (index 0) - they don't overwrite
-        if (newColorIndex === 0) continue;
+            const oldColorIndex = activeInstance.spriteController.getPixel(destX, destY);
 
-        const oldColorIndex = activeInstance.spriteController.getPixel(destX, destY);
-
-        if (oldColorIndex !== newColorIndex) {
-          this.undoManager.recordPixelChange(destX, destY, oldColorIndex, newColorIndex);
-          activeInstance.spriteController.setPixel(destX, destY, newColorIndex);
+            if (oldColorIndex !== newColorIndex) {
+              this.undoManager.recordPixelChange(destX, destY, oldColorIndex, newColorIndex);
+              activeInstance.spriteController.setPixel(destX, destY, newColorIndex);
+            }
+          }
         }
+
+        this.undoManager.endStroke();
+        this.refreshInstance(activeInstance);
+        this.saveProjectState();
+        console.log(`Pasted ${this.clipboard.width}x${this.clipboard.height} pixels at (${startX}, ${startY})`);
+        return;
       }
     }
 
-    this.undoManager.endStroke();
-    this.refreshInstance(activeInstance);
-    this.saveProjectState();
-    console.log(`Pasted ${this.clipboard.width}x${this.clipboard.height} pixels at (${startX}, ${startY})`);
+    // Second try: paste to selected cell on spritesheet
+    if (activeInstance.sheetCard) {
+      const selectedCell = activeInstance.sheetCard.controller.getSelectedCell();
+      if (selectedCell.x >= 0 && selectedCell.y >= 0) {
+        const cellSize = 8;
+        const startX = selectedCell.x * cellSize;
+        const startY = selectedCell.y * cellSize;
+        const sheetWidth = activeInstance.sheetCard.controller.getConfig().width;
+        const sheetHeight = activeInstance.sheetCard.controller.getConfig().height;
+
+        // Begin undo stroke
+        this.undoManager.beginStroke(activeInstance.id);
+
+        // Paste pixels to the cell
+        for (let y = 0; y < this.clipboard.height; y++) {
+          for (let x = 0; x < this.clipboard.width; x++) {
+            const destX = startX + x;
+            const destY = startY + y;
+
+            // Skip if out of bounds
+            if (destX < 0 || destX >= sheetWidth || destY < 0 || destY >= sheetHeight) continue;
+
+            const newColorIndex = this.clipboard.pixels[y][x];
+            const oldColorIndex = activeInstance.sheetCard.controller.getPixel(destX, destY);
+
+            if (oldColorIndex !== newColorIndex) {
+              this.undoManager.recordPixelChange(destX, destY, oldColorIndex, newColorIndex);
+              activeInstance.sheetCard.controller.setPixel(destX, destY, newColorIndex);
+            }
+          }
+        }
+
+        this.undoManager.endStroke();
+
+        // Refresh the sheet card display
+        activeInstance.sheetCard.controller.render(activeInstance.sheetCard.card.getContentContainer());
+        // Update animation previews
+        this.animationPreviewManager.onSpriteSheetUpdate(activeInstance.id);
+        this.saveProjectState();
+        console.log(`Pasted cell to (${selectedCell.x}, ${selectedCell.y})`);
+      }
+    }
   }
 
   /**
@@ -1525,18 +1599,45 @@ export class SpriteEditor {
           } else if (this.animationSelectionModePreviewId === previewId) {
             this.animationSelectionModePreviewId = null;
           }
+          // Update spritesheet selection mode overlay
+          const activeSheet = this.spriteSheetManager.getActive();
+          if (activeSheet?.sheetCard) {
+            activeSheet.sheetCard.controller.setSelectionMode(isSelecting);
+          }
           this.saveProjectState();
         },
         onShowSettings: (previewId) => {
           this.showAnimationSettings(previewId);
         },
         onStateChange: () => {
+          // Update spritesheet highlights when frames change
+          if (this.activeAnimationPreviewId) {
+            this.highlightAnimationFrames(this.activeAnimationPreviewId);
+          }
           this.saveProjectState();
         },
         onFrameChange: (previewId, frameIndex) => {
           // Update spritesheet highlight to show current frame during playback
           if (this.activeAnimationPreviewId === previewId) {
             this.updateAnimationFrameHighlight(previewId, frameIndex);
+          }
+        },
+        onFrameHover: (previewId, frameIndex, cellX, cellY) => {
+          // Highlight the hovered cell on the spritesheet
+          const preview = this.animationPreviewManager.get(previewId);
+          if (!preview) return;
+          const sheetInstance = this.spriteSheetManager.get(preview.spriteSheetId);
+          if (sheetInstance?.sheetCard?.controller) {
+            sheetInstance.sheetCard.controller.setHoveredAnimationFrame(cellX, cellY);
+          }
+        },
+        onFrameHoverEnd: (previewId) => {
+          // Clear the hover highlight on the spritesheet
+          const preview = this.animationPreviewManager.get(previewId);
+          if (!preview) return;
+          const sheetInstance = this.spriteSheetManager.get(preview.spriteSheetId);
+          if (sheetInstance?.sheetCard?.controller) {
+            sheetInstance.sheetCard.controller.clearHoveredAnimationFrame();
           }
         }
       });
@@ -1580,13 +1681,16 @@ export class SpriteEditor {
         if (isSelecting) {
           // This preview is now in selection mode
           this.animationSelectionModePreviewId = previewId;
-          console.log(`Animation preview ${previewId} entered selection mode`);
         } else {
           // Exiting selection mode
           if (this.animationSelectionModePreviewId === previewId) {
             this.animationSelectionModePreviewId = null;
-            console.log(`Animation preview ${previewId} exited selection mode`);
           }
+        }
+        // Update spritesheet selection mode overlay
+        const activeSheet = this.spriteSheetManager.getActive();
+        if (activeSheet?.sheetCard) {
+          activeSheet.sheetCard.controller.setSelectionMode(isSelecting);
         }
         this.saveProjectState();
       },
@@ -1594,12 +1698,34 @@ export class SpriteEditor {
         this.showAnimationSettings(previewId);
       },
       onStateChange: () => {
+        // Update spritesheet highlights when frames change
+        if (this.activeAnimationPreviewId) {
+          this.highlightAnimationFrames(this.activeAnimationPreviewId);
+        }
         this.saveProjectState();
       },
       onFrameChange: (previewId, frameIndex) => {
         // Update spritesheet highlight to show current frame during playback
         if (this.activeAnimationPreviewId === previewId) {
           this.updateAnimationFrameHighlight(previewId, frameIndex);
+        }
+      },
+      onFrameHover: (previewId, frameIndex, cellX, cellY) => {
+        // Highlight the hovered cell on the spritesheet
+        const preview = this.animationPreviewManager.get(previewId);
+        if (!preview) return;
+        const sheetInstance = this.spriteSheetManager.get(preview.spriteSheetId);
+        if (sheetInstance?.sheetCard?.controller) {
+          sheetInstance.sheetCard.controller.setHoveredAnimationFrame(cellX, cellY);
+        }
+      },
+      onFrameHoverEnd: (previewId) => {
+        // Clear the hover highlight on the spritesheet
+        const preview = this.animationPreviewManager.get(previewId);
+        if (!preview) return;
+        const sheetInstance = this.spriteSheetManager.get(preview.spriteSheetId);
+        if (sheetInstance?.sheetCard?.controller) {
+          sheetInstance.sheetCard.controller.clearHoveredAnimationFrame();
         }
       }
     });

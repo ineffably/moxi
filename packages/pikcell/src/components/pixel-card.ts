@@ -26,6 +26,8 @@ export interface PixelCardOptions {
   onResize?: (width: number, height: number) => void;
   onRefresh?: () => void; // Callback when card is refreshed (e.g., theme change)
   minContentSize?: boolean; // If true, prevents resizing below content's actual size
+  minContentWidth?: number; // Explicit minimum content width in grid units
+  minContentHeight?: number; // Explicit minimum content height in grid units
   backgroundColor?: number; // Custom background color (defaults to theme.cardBackground)
   clipContent?: boolean; // If true, clips content to container bounds (like CSS overflow: hidden)
   pairedCard?: PixelCard; // Optional paired card that should layer together
@@ -70,9 +72,19 @@ export class PixelCard {
 
     this.contentContainer = new PIXI.Container();
 
+    // Make content container trigger focus on click (same as title bar)
+    this.contentContainer.eventMode = 'static';
+    this.contentContainer.on('pointerdown', () => {
+      if (this.onFocus) {
+        this.onFocus();
+      }
+    });
+
     this.state = {
       contentWidth: options.contentWidth,
       contentHeight: options.contentHeight,
+      minContentWidth: options.minContentWidth,
+      minContentHeight: options.minContentHeight,
     };
 
     // Calculate title bar height based on font DISPLAY size (not installation size)

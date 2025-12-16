@@ -42,6 +42,10 @@ export interface CreatePreviewOptions {
   onStateChange?: () => void;
   /** Called when the current frame changes during playback */
   onFrameChange?: (previewId: string, frameIndex: number) => void;
+  /** Called when hovering over a frame tick bar */
+  onFrameHover?: (previewId: string, frameIndex: number, cellX: number, cellY: number) => void;
+  /** Called when mouse leaves frame tick bars */
+  onFrameHoverEnd?: (previewId: string) => void;
 }
 
 /**
@@ -94,6 +98,12 @@ export class AnimationPreviewManager {
       },
       onFrameChange: (frameIndex: number) => {
         options.onFrameChange?.(id, frameIndex);
+      },
+      onFrameHover: (frameIndex: number, cellX: number, cellY: number) => {
+        options.onFrameHover?.(id, frameIndex, cellX, cellY);
+      },
+      onFrameHoverEnd: () => {
+        options.onFrameHoverEnd?.(id);
       }
     });
 
@@ -241,6 +251,8 @@ export class AnimationPreviewManager {
       onShowSettings?: (previewId: string) => void;
       onStateChange?: () => void;
       onFrameChange?: (previewId: string, frameIndex: number) => void;
+      onFrameHover?: (previewId: string, frameIndex: number, cellX: number, cellY: number) => void;
+      onFrameHoverEnd?: (previewId: string) => void;
     }
   ): void {
     // Clear existing previews
@@ -265,7 +277,9 @@ export class AnimationPreviewManager {
         onSelectionModeChange: options.onSelectionModeChange,
         onShowSettings: options.onShowSettings,
         onStateChange: options.onStateChange,
-        onFrameChange: options.onFrameChange
+        onFrameChange: options.onFrameChange,
+        onFrameHover: options.onFrameHover,
+        onFrameHoverEnd: options.onFrameHoverEnd
       });
 
       if (instance) {
