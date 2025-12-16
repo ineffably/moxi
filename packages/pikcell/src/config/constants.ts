@@ -293,7 +293,7 @@ export const TOOL_CONSTANTS = {
  */
 export const ANIMATION_CONSTANTS = {
   /** Default FPS for new animations */
-  DEFAULT_FPS: 12,
+  DEFAULT_FPS: 5,
 
   /** Minimum FPS */
   MIN_FPS: 1,

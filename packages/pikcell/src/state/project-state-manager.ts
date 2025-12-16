@@ -25,6 +25,8 @@ export interface OperationResult<T = void> {
  */
 export interface SpriteSheetState {
   id: string;
+  /** User-visible name for the spritesheet */
+  name: string;
   type: SpriteSheetType;
   showGrid: boolean;
   pixels: number[][]; // 2D array of color indices
@@ -55,7 +57,7 @@ export interface ProjectState {
  * Handles saving and loading of sprite project data to/from localStorage
  */
 export class ProjectStateManager {
-  private static readonly CURRENT_VERSION = 2;
+  private static readonly CURRENT_VERSION = 3;
 
   /**
    * Create a new empty project
@@ -155,6 +157,20 @@ export class ProjectStateManager {
       migrated.animationPreviews = [];
       migrated.version = 2;
       console.log('Migrated project from v1 to v2 (added animation previews)');
+    }
+
+    // v2 -> v3: Add name field to sprite sheets
+    if (migrated.version < 3) {
+      migrated.spriteSheets = migrated.spriteSheets.map((sheet, index) => {
+        // Generate a default name based on type and index
+        const typeName = sheet.type === 'PICO-8' ? 'PICO-8' : 'TIC-80';
+        return {
+          ...sheet,
+          name: sheet.name || `${typeName} Sheet ${index + 1}`
+        };
+      });
+      migrated.version = 3;
+      console.log('Migrated project from v2 to v3 (added sprite sheet names)');
     }
 
     return migrated;

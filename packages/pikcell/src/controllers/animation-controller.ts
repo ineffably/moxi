@@ -37,9 +37,6 @@ export class AnimationController {
   private direction: 1 | -1 = 1; // For ping-pong
   private scale: number;
 
-  // Texture cache for frames
-  private frameTextures: Map<string, PIXI.Texture> = new Map();
-
   // Event callbacks
   private onFrameChange?: (frameIndex: number, texture: PIXI.Texture) => void;
   private onPlayStateChange?: (isPlaying: boolean) => void;
@@ -151,7 +148,6 @@ export class AnimationController {
     this.sequence = sequence;
     this.currentFrameIndex = 0;
     this.direction = 1;
-    this.clearTextureCache();
     this.emitFrameChange();
   }
 
@@ -188,7 +184,6 @@ export class AnimationController {
       ANIMATION_CONSTANTS.MIN_PREVIEW_SCALE,
       Math.min(ANIMATION_CONSTANTS.MAX_PREVIEW_SCALE, scale)
     );
-    this.clearTextureCache();
     this.emitFrameChange();
   }
 
@@ -366,47 +361,40 @@ export class AnimationController {
 
   /**
    * Generate texture for a frame reference
+   * Uses a sub-texture (frame) of the spritesheet texture for direct projection
    */
   private generateFrameTexture(frameRef: SpriteFrameRef): PIXI.Texture {
-    const cacheKey = `${frameRef.cellX}_${frameRef.cellY}_${this.scale}`;
-
-    if (this.frameTextures.has(cacheKey)) {
-      return this.frameTextures.get(cacheKey)!;
-    }
-
-    const sheetConfig = this.spriteSheetController.getConfig();
     const cellSize = SPRITE_CONTROLLER_CONFIG.cellSize;
 
-    // Create canvas for this frame
-    const canvas = document.createElement('canvas');
-    canvas.width = cellSize;
-    canvas.height = cellSize;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) {
+    // Get the spritesheet texture directly
+    const sheetTexture = this.spriteSheetController.getTexture();
+    if (!sheetTexture) {
+      console.warn('Animation: No spritesheet texture available');
       return PIXI.Texture.EMPTY;
     }
 
-    // Draw the sprite from sprite sheet data
-    for (let y = 0; y < cellSize; y++) {
-      for (let x = 0; x < cellSize; x++) {
-        const globalX = frameRef.cellX * cellSize + x;
-        const globalY = frameRef.cellY * cellSize + y;
-        const colorIndex = this.spriteSheetController.getPixel(globalX, globalY);
-        const color = sheetConfig.palette[colorIndex];
-
-        const r = (color >> 16) & 0xff;
-        const g = (color >> 8) & 0xff;
-        const b = color & 0xff;
-        ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
-        ctx.fillRect(x, y, 1, 1);
-      }
+    if (!sheetTexture.source) {
+      console.warn('Animation: Spritesheet texture has no source');
+      return PIXI.Texture.EMPTY;
     }
 
-    // Create texture with nearest neighbor scaling
-    const texture = PIXI.Texture.from(canvas);
+    // Create a sub-texture that is a "view" into the spritesheet at this cell
+    // Following tilemap-matic pattern: use Rectangle and texture source
+    const frame = new PIXI.Rectangle(
+      frameRef.cellX * cellSize,
+      frameRef.cellY * cellSize,
+      cellSize,
+      cellSize
+    );
+
+    const texture = new PIXI.Texture({
+      source: sheetTexture.source,
+      frame: frame
+    });
+
+    // Ensure nearest-neighbor scaling for pixel art
     texture.source.scaleMode = 'nearest';
 
-    this.frameTextures.set(cacheKey, texture);
     return texture;
   }
 
@@ -423,18 +411,10 @@ export class AnimationController {
   }
 
   /**
-   * Clear texture cache (call when scale changes or sprite sheet updates)
-   */
-  public clearTextureCache(): void {
-    this.frameTextures.forEach(texture => texture.destroy(true));
-    this.frameTextures.clear();
-  }
-
-  /**
-   * Called when sprite sheet pixels change - invalidates affected textures
+   * Called when sprite sheet pixels change - triggers redraw
+   * Since we use sub-textures of the spritesheet, they automatically reflect changes
    */
   public onSpriteSheetUpdate(): void {
-    this.clearTextureCache();
     this.emitFrameChange();
   }
 
@@ -443,7 +423,6 @@ export class AnimationController {
    */
   public destroy(): void {
     this.pause();
-    this.clearTextureCache();
     this.onFrameChange = undefined;
     this.onPlayStateChange = undefined;
   }

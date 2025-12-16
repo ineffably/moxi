@@ -24,9 +24,10 @@ export class SpriteSheetManager implements ISpriteSheetManager {
    * @param type Sprite sheet type (PICO-8, TIC-80, etc.)
    * @param savedId Optional saved ID to reuse when loading from state
    * @param config Optional configuration overrides
+   * @param name Optional name for the sprite sheet
    * @returns The created sprite sheet instance (or existing one if ID already exists)
    */
-  create(type: SpriteSheetType, savedId?: string, config?: Partial<SpriteSheetConfig>): SpriteSheetInstance {
+  create(type: SpriteSheetType, savedId?: string, config?: Partial<SpriteSheetConfig>, name?: string): SpriteSheetInstance {
     const id = savedId || this.generateId();
 
     // If an instance with this ID already exists, return it instead of creating a duplicate
@@ -35,10 +36,14 @@ export class SpriteSheetManager implements ISpriteSheetManager {
       return this.instances.get(id)!;
     }
 
+    // Generate a default name if none provided
+    const sheetName = name || this.generateDefaultName(type);
+
     // Create the instance with sheetCard as undefined initially
     // The caller MUST set sheetCard before using the instance
-    const instance: Partial<SpriteSheetInstance> & { id: string } = {
+    const instance: Partial<SpriteSheetInstance> & { id: string; name: string } = {
       id,
+      name: sheetName,
       spriteCard: null,
       spriteController: null,
     };
@@ -180,7 +185,7 @@ export class SpriteSheetManager implements ISpriteSheetManager {
    * @param event Event type to subscribe to
    * @param handler Event handler function
    */
-  on(event: 'created' | 'removed' | 'activeChanged', handler: EventHandler): void {
+  on(event: 'created' | 'removed' | 'activeChanged' | 'renamed', handler: EventHandler): void {
     if (!this.eventHandlers.has(event)) {
       this.eventHandlers.set(event, new Set());
     }
@@ -193,7 +198,7 @@ export class SpriteSheetManager implements ISpriteSheetManager {
    * @param event Event type to unsubscribe from
    * @param handler Event handler function to remove
    */
-  off(event: 'created' | 'removed' | 'activeChanged', handler: EventHandler): void {
+  off(event: 'created' | 'removed' | 'activeChanged' | 'renamed', handler: EventHandler): void {
     const handlers = this.eventHandlers.get(event);
     if (handlers) {
       handlers.delete(handler);
@@ -258,5 +263,65 @@ export class SpriteSheetManager implements ISpriteSheetManager {
       activeId: this.activeId,
       type: this.getProjectSpriteSheetType(),
     };
+  }
+
+  /**
+   * Set the name of a sprite sheet
+   *
+   * @param id Sprite sheet ID
+   * @param name New name for the sprite sheet
+   * @returns True if renamed successfully
+   */
+  setName(id: string, name: string): boolean {
+    const instance = this.instances.get(id);
+    if (!instance) return false;
+
+    instance.name = name;
+    this.emit('renamed', id);
+    return true;
+  }
+
+  /**
+   * Get a sprite sheet by name
+   *
+   * @param name Sprite sheet name to find
+   * @returns The sprite sheet instance or undefined if not found
+   */
+  getByName(name: string): SpriteSheetInstance | undefined {
+    for (const instance of this.instances.values()) {
+      if (instance.name === name) {
+        return instance;
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Check if a sprite sheet with the given name exists
+   *
+   * @param name Sprite sheet name to check
+   * @returns True if a sprite sheet with this name exists
+   */
+  hasName(name: string): boolean {
+    return this.getByName(name) !== undefined;
+  }
+
+  /**
+   * Generate a default name for a sprite sheet
+   *
+   * @param type Sprite sheet type
+   * @returns A default name like "PICO-8 Sheet 1"
+   */
+  private generateDefaultName(type: SpriteSheetType): string {
+    let index = 1;
+    let baseName = type === 'PICO-8' ? 'PICO-8' : 'TIC-80';
+    let name = `${baseName} Sheet ${index}`;
+
+    while (this.hasName(name)) {
+      index++;
+      name = `${baseName} Sheet ${index}`;
+    }
+
+    return name;
   }
 }

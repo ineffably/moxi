@@ -49,8 +49,8 @@ export function createAnimationSettingsDialog(options: AnimationSettingsDialogOp
   overlay.addChild(backdrop);
 
   // Dialog dimensions
-  const contentWidth = 60; // Grid units
-  const contentHeight = 50; // Grid units
+  const contentWidth = 80; // Grid units
+  const contentHeight = 75; // Grid units - enough for all content + buttons
 
   // Create dialog card
   const dialogCard = new PixelCard({
@@ -66,7 +66,7 @@ export function createAnimationSettingsDialog(options: AnimationSettingsDialogOp
   const contentContainer = dialogCard.getContentContainer();
   const theme = getTheme();
 
-  let currentY = px(2);
+  let currentY = px(4);
 
   // Cleanup function
   const cleanup = () => {
@@ -79,17 +79,17 @@ export function createAnimationSettingsDialog(options: AnimationSettingsDialogOp
 
   // --- Frame Duration Section ---
   const durationLabel = createText('Frame Duration:', theme.text);
-  durationLabel.position.set(px(2), currentY);
+  durationLabel.position.set(px(4), currentY);
   contentContainer.addChild(durationLabel);
-  currentY += durationLabel.height + px(1);
+  currentY += durationLabel.height + px(3);
 
   // Duration display and controls row
   const durationRow = new PIXI.Container();
-  durationRow.position.set(px(2), currentY);
+  durationRow.position.set(px(4), currentY);
 
   // Decrement button [-]
   const decrementBtn = createPixelButton({
-    size: 8,
+    size: 10,
     label: '-',
     selectionMode: 'press',
     actionMode: 'click',
@@ -104,12 +104,12 @@ export function createAnimationSettingsDialog(options: AnimationSettingsDialogOp
 
   // Duration value text
   const durationValueText = createText(`${frameDurationMs}ms`, theme.text);
-  durationValueText.position.set(px(10), px(1));
+  durationValueText.position.set(px(16), px(2));
   durationRow.addChild(durationValueText);
 
   // Increment button [+]
   const incrementBtn = createPixelButton({
-    size: 8,
+    size: 10,
     label: '+',
     selectionMode: 'press',
     actionMode: 'click',
@@ -119,16 +119,16 @@ export function createAnimationSettingsDialog(options: AnimationSettingsDialogOp
     }
   });
   createdButtons.push(incrementBtn);
-  incrementBtn.container.position.set(px(26), 0);
+  incrementBtn.container.position.set(px(38), 0);
   durationRow.addChild(incrementBtn.container);
 
   // FPS display (calculated from duration)
   const fpsText = createText(`(${Math.round(1000 / frameDurationMs)} fps)`, theme.text);
-  fpsText.position.set(px(36), px(1));
+  fpsText.position.set(px(54), px(2));
   durationRow.addChild(fpsText);
 
   contentContainer.addChild(durationRow);
-  currentY += px(10);
+  currentY += px(14);
 
   function updateDurationDisplay() {
     durationValueText.text = `${frameDurationMs}ms`;
@@ -144,9 +144,9 @@ export function createAnimationSettingsDialog(options: AnimationSettingsDialogOp
     }
   });
   createdCheckboxes.push(loopCheckbox);
-  loopCheckbox.container.position.set(px(2), currentY);
+  loopCheckbox.container.position.set(px(4), currentY);
   contentContainer.addChild(loopCheckbox.container);
-  currentY += loopCheckbox.container.height + px(2);
+  currentY += loopCheckbox.container.height + px(4);
 
   // --- Ping-Pong Checkbox ---
   const pingPongCheckbox = createPixelCheckbox({
@@ -157,20 +157,20 @@ export function createAnimationSettingsDialog(options: AnimationSettingsDialogOp
     }
   });
   createdCheckboxes.push(pingPongCheckbox);
-  pingPongCheckbox.container.position.set(px(2), currentY);
+  pingPongCheckbox.container.position.set(px(4), currentY);
   contentContainer.addChild(pingPongCheckbox.container);
-  currentY += pingPongCheckbox.container.height + px(4);
+  currentY += pingPongCheckbox.container.height + px(6);
 
   // --- Frame Count Info ---
   const frameCountText = createText(`Frames: ${sequence.frames.length}`, theme.text);
-  frameCountText.position.set(px(2), currentY);
+  frameCountText.position.set(px(4), currentY);
   contentContainer.addChild(frameCountText);
-  currentY += frameCountText.height + px(4);
+  currentY += frameCountText.height + px(8);
 
   // --- Buttons Row ---
-  const buttonWidth = 18;
-  const buttonHeight = 10;
-  const buttonSpacingUnits = 4;
+  const buttonWidth = 24;
+  const buttonHeight = 12;
+  const buttonSpacingUnits = 6;
   const buttonsY = currentY;
 
   // Calculate total width of both buttons + spacing, then center

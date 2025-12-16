@@ -30,6 +30,7 @@ export interface PixelCardOptions {
   clipContent?: boolean; // If true, clips content to container bounds (like CSS overflow: hidden)
   pairedCard?: PixelCard; // Optional paired card that should layer together
   onFocus?: () => void; // Callback when card is clicked/focused
+  titleBarExtraHeight?: number; // Extra height to add to title bar (in grid units)
 }
 
 export interface PixelCardResizeState {
@@ -77,7 +78,8 @@ export class PixelCard {
     // Calculate title bar height based on font DISPLAY size (not installation size)
     const fontHeight = getFontDisplaySize();
     const verticalPadding = px(GRID.padding * 2);
-    this.titleBarHeightPx = Math.ceil(fontHeight + verticalPadding);
+    const extraHeight = options.titleBarExtraHeight ? px(options.titleBarExtraHeight) : 0;
+    this.titleBarHeightPx = Math.ceil(fontHeight + verticalPadding + extraHeight);
 
     // Initialize drag handler
     this.dragHandler = new CardDragHandler({

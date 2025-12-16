@@ -1,18 +1,17 @@
 /**
  * Animation Preview Card
  *
- * UI for animation preview with controls above the preview area.
+ * UI for animation preview with controls in the title bar.
  *
  * Layout:
- * +----------------------------------+
- * | Animation                    [X] |  <- Title bar with close
- * +----------------------------------+
- * |  [>] 12fps [L][P]                |  <- Controls row
- * |        +------------+            |
- * |        |  Preview   |            |
- * |        +------------+            |
- * |       [0][1][2][+]               |  <- Frame strip
- * +----------------------------------+
+ * +----------------------------------------+
+ * | [<][|>][>]                    [*][X]   |  <- Playback left, settings/close right
+ * +----------------------------------------+
+ * |          +------------+                |
+ * |          |  Preview   |                |
+ * |          +------------+                |
+ * |         [|][|][|][+]                   |  <- Frame strip (tick bars)
+ * +----------------------------------------+
  */
 import * as PIXI from 'pixi.js';
 import { GRID, px } from '@moxijs/ui';
@@ -43,6 +42,8 @@ export interface AnimationPreviewCardOptions {
   onFocus?: () => void;
   onSelectionModeChange?: (isSelecting: boolean) => void;
   onShowSettings?: () => void;
+  /** Called when current frame changes during playback */
+  onFrameChange?: (frameIndex: number) => void;
 }
 
 export interface AnimationPreviewCardResult extends CardResult {
@@ -63,6 +64,8 @@ export interface AnimationPreviewCardResult extends CardResult {
   handleCellClick: (cellX: number, cellY: number) => void;
   /** Get frames for highlighting on sprite sheet */
   getFrameCells: () => Array<{ cellX: number; cellY: number }>;
+  /** Get current frame index for highlight updates */
+  getCurrentFrameIndex: () => number;
 }
 
 /**
@@ -80,7 +83,8 @@ export function createAnimationPreviewCard(options: AnimationPreviewCardOptions)
     onClose,
     onFocus,
     onSelectionModeChange,
-    onShowSettings
+    onShowSettings,
+    onFrameChange
   } = options;
 
   const config = ANIMATION_PREVIEW_CARD_CONFIG;
@@ -89,21 +93,24 @@ export function createAnimationPreviewCard(options: AnimationPreviewCardOptions)
   let previewSize: number = config.defaultPreviewSize;
   const sequence = initialSequence ?? createDefaultSequence();
   let isSelectingFrames = false;
+  let isPlaying = false;
 
   // Layout calculations
-  const frameStripHeight = config.frameThumbnailSize + GRID.padding;
+  // Tick bars are smaller than thumbnails - 8 grid units high + padding
+  const frameStripHeight = 8 + GRID.padding;
   const contentWidth = previewSize + GRID.padding * 4;
   const contentHeight = previewSize + frameStripHeight + GRID.padding * 2;
 
   // Create the managed card
   const managed = createManagedCard({
-    title: 'Animation',
+    title: '',
     x,
     y,
     contentWidth,
     contentHeight,
     renderer,
     onFocus,
+    titleBarExtraHeight: 1, // Extra height for playback control buttons
     onResize: (newWidth, newHeight) => {
       const availableWidth = newWidth - GRID.padding * 4;
       const availableHeight = newHeight - frameStripHeight - GRID.padding * 2;
@@ -120,42 +127,117 @@ export function createAnimationPreviewCard(options: AnimationPreviewCardOptions)
 
   const { card, contentContainer } = managed;
 
-  // Title bar buttons
-  const closeBtnSize = config.controlButtonSize;
+  // Title bar buttons - layout: [<][|>][>]          [*][X]
+  // Playback controls left-aligned, settings/close right-aligned
+  const btnSize = config.controlButtonSize;
+  const btnSpacing = 1; // Grid units between buttons
   const cardTotalWidth = contentWidth + GRID.border * 6 + GRID.padding * 2;
+  const btnY = px(GRID.border * 2); // Align with title bar top
 
-  // Close button in title bar (rightmost)
-  const titleBarCloseBtn = createPixelButton({
-    size: closeBtnSize,
+  // Track all title bar buttons for cleanup
+  const titleBarButtons: Array<{ destroy: () => void }> = [];
+
+  // === RIGHT-ALIGNED: Settings and Close ===
+  const rightEdge = cardTotalWidth - GRID.border * 2 - 1;
+  let rightX = rightEdge;
+
+  // Close button [X] (rightmost)
+  rightX -= btnSize;
+  const closeBtn = createPixelButton({
+    size: btnSize,
     selectionMode: 'press',
     actionMode: 'click',
     label: 'X',
-    onClick: () => {
-      onClose?.();
-    }
+    onClick: () => onClose?.()
   });
-  titleBarCloseBtn.container.position.set(
-    px(cardTotalWidth - GRID.border * 2 - closeBtnSize - 1),
-    px(GRID.border * 2)
-  );
-  card.container.addChild(titleBarCloseBtn.container);
+  closeBtn.container.position.set(px(rightX), btnY);
+  card.container.addChild(closeBtn.container);
+  titleBarButtons.push(closeBtn);
 
-  // Settings button in title bar (left of close)
-  // Use label instead of icon to match close button size
+  // Settings button [*]
+  rightX -= btnSpacing + btnSize;
   const settingsBtn = createPixelButton({
-    size: closeBtnSize,
+    size: btnSize,
     selectionMode: 'press',
     actionMode: 'click',
-    label: '*',  // Simple gear representation, same style as X
+    label: '*',
+    onClick: () => onShowSettings?.()
+  });
+  settingsBtn.container.position.set(px(rightX), btnY);
+  card.container.addChild(settingsBtn.container);
+  titleBarButtons.push(settingsBtn);
+
+  // === LEFT-ALIGNED: Playback controls ===
+  let leftX = GRID.border * 2;
+
+  // Back frame button [<]
+  const backBtn = createPixelButton({
+    size: btnSize,
+    selectionMode: 'press',
+    actionMode: 'click',
+    label: '<',
     onClick: () => {
-      onShowSettings?.();
+      animController.stepBackward();
     }
   });
-  settingsBtn.container.position.set(
-    px(cardTotalWidth - GRID.border * 2 - closeBtnSize * 2 - config.titleControlSpacing - 1),
-    px(GRID.border * 2)
-  );
-  card.container.addChild(settingsBtn.container);
+  backBtn.container.position.set(px(leftX), btnY);
+  card.container.addChild(backBtn.container);
+  titleBarButtons.push(backBtn);
+
+  // Play/Pause button [|>] or [||]
+  leftX += btnSize + btnSpacing;
+  const playPauseBtnX = leftX; // Store for updatePlayPauseButton
+  let playPauseBtn = createPixelButton({
+    size: btnSize,
+    selectionMode: 'press',
+    actionMode: 'click',
+    label: '|>',
+    onClick: () => {
+      animController.togglePlayback();
+    }
+  });
+  playPauseBtn.container.position.set(px(leftX), btnY);
+  card.container.addChild(playPauseBtn.container);
+  titleBarButtons.push(playPauseBtn);
+
+  // Forward frame button [>]
+  leftX += btnSize + btnSpacing;
+  const forwardBtn = createPixelButton({
+    size: btnSize,
+    selectionMode: 'press',
+    actionMode: 'click',
+    label: '>',
+    onClick: () => {
+      animController.stepForward();
+    }
+  });
+  forwardBtn.container.position.set(px(leftX), btnY);
+  card.container.addChild(forwardBtn.container);
+  titleBarButtons.push(forwardBtn);
+
+  /**
+   * Update play/pause button label based on play state
+   */
+  function updatePlayPauseButton() {
+    // Remove old button
+    card.container.removeChild(playPauseBtn.container);
+    playPauseBtn.destroy();
+
+    // Create new button with updated label
+    playPauseBtn = createPixelButton({
+      size: btnSize,
+      selectionMode: 'press',
+      actionMode: 'click',
+      label: isPlaying ? '||' : '|>',
+      onClick: () => {
+        animController.togglePlayback();
+      }
+    });
+    playPauseBtn.container.position.set(px(playPauseBtnX), btnY);
+    card.container.addChild(playPauseBtn.container);
+    // Update the reference in titleBarButtons
+    titleBarButtons[3] = playPauseBtn;
+  }
 
   // Animation controller
   const animController = new AnimationController({
@@ -165,6 +247,12 @@ export function createAnimationPreviewCard(options: AnimationPreviewCardOptions)
     onFrameChange: (frameIndex, texture) => {
       updatePreviewSprite(texture);
       redrawFrameStrip();
+      // Notify external listener (e.g., for updating spritesheet highlights)
+      onFrameChange?.(frameIndex);
+    },
+    onPlayStateChange: (playing) => {
+      isPlaying = playing;
+      updatePlayPauseButton();
     }
   });
 
@@ -175,6 +263,12 @@ export function createAnimationPreviewCard(options: AnimationPreviewCardOptions)
 
   contentContainer.addChild(previewContainer);
   contentContainer.addChild(frameStripContainer);
+
+  // Make content container interactive to trigger focus on any click
+  contentContainer.eventMode = 'static';
+  contentContainer.on('pointerdown', () => {
+    onFocus?.();
+  });
 
   /**
    * Update the preview sprite texture
@@ -233,78 +327,67 @@ export function createAnimationPreviewCard(options: AnimationPreviewCardOptions)
   }
 
   /**
-   * Draw the frame strip
+   * Draw the frame strip with tick bars instead of thumbnails
+   * More compact - allows more frames to fit
    */
   function redrawFrameStrip() {
     frameStripContainer.removeChildren();
 
     const theme = getTheme();
-    const thumbSize = config.frameThumbnailSize;
-    const thumbSizePx = px(thumbSize);
-    const spacingPx = px(config.frameSpacing);
     const frames = sequence.frames;
     const currentFrameIndex = animController.getCurrentFrameIndex();
-    const cellSize = SPRITE_CONTROLLER_CONFIG.cellSize;
+
+    // Tick bar dimensions - much smaller than thumbnails
+    const tickWidth = px(2);    // Narrow bar
+    const tickHeight = px(8);   // Short height
+    const tickSpacing = px(1);  // Tight spacing
+    const addBtnSize = config.controlButtonSize;
+    const addBtnSizePx = px(addBtnSize);
 
     // Calculate strip dimensions
-    const addButtonWidth = thumbSizePx;
-    const totalFrameWidth = frames.length * (thumbSizePx + spacingPx);
-    const totalWidth = totalFrameWidth + addButtonWidth;
+    const totalTickWidth = frames.length * (tickWidth + tickSpacing);
+    const totalWidth = totalTickWidth + addBtnSizePx + px(2); // + button with gap
 
     // Center the strip
     const contentWidthPx = px(contentWidth);
     const startX = (contentWidthPx - totalWidth) / 2;
 
-    // Frame thumbnails
+    // Frame tick bars
     frames.forEach((frameRef, index) => {
-      const thumbX = startX + index * (thumbSizePx + spacingPx);
+      const tickX = startX + index * (tickWidth + tickSpacing);
 
-      // Background with highlight for current frame
-      const thumbBg = new PIXI.Graphics();
-      thumbBg.roundPixels = true;
-      thumbBg.eventMode = 'static';
-      thumbBg.cursor = 'pointer';
+      const tickBar = new PIXI.Graphics();
+      tickBar.roundPixels = true;
+      tickBar.eventMode = 'static';
+      tickBar.cursor = 'pointer';
 
-      if (index === currentFrameIndex) {
-        thumbBg.rect(thumbX - px(1), -px(1), thumbSizePx + px(2), thumbSizePx + px(2));
-        thumbBg.fill({ color: theme.accent });
+      // Current frame gets accent color, others get muted color
+      const isCurrentFrame = index === currentFrameIndex;
+      const barColor = isCurrentFrame ? theme.accent : theme.cardBorder;
+      const barAlpha = isCurrentFrame ? 1.0 : 0.6;
+
+      // Draw the tick bar
+      tickBar.roundRect(tickX, 0, tickWidth, tickHeight, 1);
+      tickBar.fill({ color: barColor, alpha: barAlpha });
+
+      // Add subtle border for visibility
+      if (isCurrentFrame) {
+        tickBar.roundRect(tickX, 0, tickWidth, tickHeight, 1);
+        tickBar.stroke({ color: 0xffffff, width: 1, alpha: 0.3 });
       }
 
-      thumbBg.rect(thumbX, 0, thumbSizePx, thumbSizePx);
-      thumbBg.fill({ color: theme.cardTitleBar });
-      frameStripContainer.addChild(thumbBg);
-
-      // Thumbnail sprite
-      const texture = animController.getFrameTexture(index);
-      if (texture) {
-        const thumbSprite = new PIXI.Sprite(texture);
-        const thumbScale = Math.floor(thumbSizePx / cellSize);
-        thumbSprite.scale.set(thumbScale);
-        thumbSprite.roundPixels = true;
-        thumbSprite.position.set(
-          thumbX + (thumbSizePx - cellSize * thumbScale) / 2,
-          (thumbSizePx - cellSize * thumbScale) / 2
-        );
-        frameStripContainer.addChild(thumbSprite);
-      }
-
-      // Cell coordinates label
-      const coordText = createText(`${frameRef.cellX},${frameRef.cellY}`, theme.text);
-      coordText.scale.set(0.5);
-      coordText.position.set(
-        thumbX + (thumbSizePx - coordText.width * 0.5) / 2,
-        thumbSizePx + px(1)
-      );
-      frameStripContainer.addChild(coordText);
+      frameStripContainer.addChild(tickBar);
 
       // Click to select frame
-      thumbBg.on('pointerdown', (e: PIXI.FederatedPointerEvent) => {
+      tickBar.on('pointerdown', (e: PIXI.FederatedPointerEvent) => {
+        onFocus?.();
         animController.goToFrame(index);
         e.stopPropagation();
       });
 
       // Right-click to remove
-      thumbBg.on('rightclick', (e: PIXI.FederatedPointerEvent) => {
+      tickBar.on('rightclick', (e: PIXI.FederatedPointerEvent) => {
+        onFocus?.();
         animController.removeFrame(index);
         onSequenceChange?.(sequence);
         redrawContent();
@@ -313,16 +396,13 @@ export function createAnimationPreviewCard(options: AnimationPreviewCardOptions)
     });
 
     // Add/Select frame button [+] - toggles selection mode
-    // Use same size as close button (controlButtonSize)
-    const addBtnSize = config.controlButtonSize;
-    const addBtnSizePx = px(addBtnSize);
-    const addX = startX + frames.length * (thumbSizePx + spacingPx);
+    const addX = startX + frames.length * (tickWidth + tickSpacing) + px(1);
     const addBtn = createPixelButton({
       size: addBtnSize,
       selectionMode: 'press',
       actionMode: 'toggle',
       selected: isSelectingFrames,
-      label: '+',  // Simple label, same style as X
+      label: '+',
       onClick: () => {
         isSelectingFrames = !isSelectingFrames;
         onSelectionModeChange?.(isSelectingFrames);
@@ -330,14 +410,14 @@ export function createAnimationPreviewCard(options: AnimationPreviewCardOptions)
       }
     });
     managed.trackChild(addBtn);
-    // Vertically center the smaller button relative to thumbnails
-    const addBtnY = (thumbSizePx - addBtnSizePx) / 2;
+    // Vertically center the button relative to ticks
+    const addBtnY = (tickHeight - addBtnSizePx) / 2;
     addBtn.container.position.set(addX, addBtnY);
     frameStripContainer.addChild(addBtn.container);
 
-    // Position strip below preview
+    // Position strip below preview with less vertical space
     const previewSizePx = px(previewSize);
-    frameStripContainer.position.set(0, px(GRID.padding) + previewSizePx + px(GRID.padding));
+    frameStripContainer.position.set(0, px(GRID.padding) + previewSizePx + px(1));
   }
 
   /**
@@ -419,6 +499,7 @@ export function createAnimationPreviewCard(options: AnimationPreviewCardOptions)
     getFrameCells: () => {
       return sequence.frames.map(f => ({ cellX: f.cellX, cellY: f.cellY }));
     },
+    getCurrentFrameIndex: () => animController.getCurrentFrameIndex(),
 
     destroy: () => {
       // Exit selection mode on destroy
@@ -427,8 +508,8 @@ export function createAnimationPreviewCard(options: AnimationPreviewCardOptions)
         onSelectionModeChange?.(false);
       }
       animController.destroy();
-      settingsBtn.destroy();
-      titleBarCloseBtn.destroy();
+      // Clean up all title bar buttons
+      titleBarButtons.forEach(btn => btn.destroy());
       managed.destroy();
     }
   };

@@ -22,6 +22,9 @@ export interface SpriteSheetInstance {
   /** Unique identifier for this sprite sheet */
   id: string;
 
+  /** User-visible name for this sprite sheet */
+  name: string;
+
   /** UI card for the sprite sheet */
   sheetCard: SpriteSheetCardResult;
 
@@ -74,12 +77,17 @@ export interface ISpriteSheetManager {
   /**
    * Create a new sprite sheet instance
    */
-  create(type: SpriteSheetType, savedId?: string, config?: Partial<SpriteSheetConfig>): SpriteSheetInstance;
+  create(type: SpriteSheetType, savedId?: string, config?: Partial<SpriteSheetConfig>, name?: string): SpriteSheetInstance;
 
   /**
    * Get a sprite sheet instance by ID
    */
   get(id: string): SpriteSheetInstance | undefined;
+
+  /**
+   * Get a sprite sheet instance by name
+   */
+  getByName(name: string): SpriteSheetInstance | undefined;
 
   /**
    * Get the currently active sprite sheet
@@ -112,6 +120,16 @@ export interface ISpriteSheetManager {
   has(id: string): boolean;
 
   /**
+   * Check if a sprite sheet with the given name exists
+   */
+  hasName(name: string): boolean;
+
+  /**
+   * Set the name of a sprite sheet
+   */
+  setName(id: string, name: string): boolean;
+
+  /**
    * Get the count of sprite sheets
    */
   count(): number;
@@ -119,7 +137,7 @@ export interface ISpriteSheetManager {
   /**
    * Subscribe to sprite sheet events
    */
-  on(event: 'created' | 'removed' | 'activeChanged', handler: (id: string) => void): void;
+  on(event: 'created' | 'removed' | 'activeChanged' | 'renamed', handler: (id: string) => void): void;
 }
 
 /**

@@ -69,7 +69,7 @@ export function createDefaultSequence(): AnimationSequenceConfig {
     id: generateAnimationId(),
     name: 'Animation',
     frames: [],
-    frameDurationMs: 83, // ~12 fps
+    frameDurationMs: 200, // 5 fps
     loop: true,
     pingPong: false
   };

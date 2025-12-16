@@ -39,6 +39,8 @@ export interface CreatePreviewOptions {
   onSelectionModeChange?: (previewId: string, isSelecting: boolean) => void;
   onShowSettings?: (previewId: string) => void;
   onStateChange?: () => void;
+  /** Called when the current frame changes during playback */
+  onFrameChange?: (previewId: string, frameIndex: number) => void;
 }
 
 /**
@@ -88,6 +90,9 @@ export class AnimationPreviewManager {
       },
       onShowSettings: () => {
         options.onShowSettings?.(id);
+      },
+      onFrameChange: (frameIndex: number) => {
+        options.onFrameChange?.(id, frameIndex);
       }
     });
 
@@ -234,6 +239,7 @@ export class AnimationPreviewManager {
       onSelectionModeChange?: (previewId: string, isSelecting: boolean) => void;
       onShowSettings?: (previewId: string) => void;
       onStateChange?: () => void;
+      onFrameChange?: (previewId: string, frameIndex: number) => void;
     }
   ): void {
     // Clear existing previews
@@ -257,7 +263,8 @@ export class AnimationPreviewManager {
         onFocus: options.onFocus,
         onSelectionModeChange: options.onSelectionModeChange,
         onShowSettings: options.onShowSettings,
-        onStateChange: options.onStateChange
+        onStateChange: options.onStateChange,
+        onFrameChange: options.onFrameChange
       });
 
       if (instance) {
