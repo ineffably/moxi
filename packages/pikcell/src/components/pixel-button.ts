@@ -51,6 +51,8 @@ export interface PixelButtonOptions {
   selectionMode?: SelectionMode;  // 'highlight' for swatches, 'press' for tool buttons (visual appearance)
   actionMode?: ActionMode;        // 'click' for simple click, 'toggle' for toggleable state (behavior)
   tooltip?: string;       // Optional tooltip text
+  /** Container for tooltips - if provided, tooltips render here (for z-ordering) */
+  tooltipLayer?: PIXI.Container;
   /** Optional callback to trigger when button is clicked (before onClick, useful for focus) */
   onFocus?: () => void;
   /** Enable pixel explosion effect on click/toggle */
@@ -103,6 +105,7 @@ export function createPixelButton(options: PixelButtonOptions): PixelButtonResul
     selectionMode = 'press',
     actionMode = 'click',
     tooltip,
+    tooltipLayer,
     onFocus,
     explodeEffect = false,
     explodeScene,
@@ -288,21 +291,39 @@ export function createPixelButton(options: PixelButtonOptions): PixelButtonResul
       if (tooltipContainer) return;
 
       tooltipContainer = createTooltip();
-      const local = e.getLocalPosition(button);
-      tooltipContainer.position.set(local.x, local.y - tooltipContainer.height - 2);
-      button.addChild(tooltipContainer);
+
+      if (tooltipLayer) {
+        // Use global coordinates for the tooltip layer
+        const globalPos = button.getGlobalPosition();
+        tooltipContainer.position.set(globalPos.x, globalPos.y - tooltipContainer.height - 2);
+        tooltipLayer.addChild(tooltipContainer);
+      } else {
+        // Fallback: add to button with local coordinates
+        const local = e.getLocalPosition(button);
+        tooltipContainer.position.set(local.x, local.y - tooltipContainer.height - 2);
+        button.addChild(tooltipContainer);
+      }
     });
 
     button.on('pointermove', (e: PIXI.FederatedPointerEvent) => {
       if (tooltipContainer) {
-        const local = e.getLocalPosition(button);
-        tooltipContainer.position.set(local.x, local.y - tooltipContainer.height - 2);
+        if (tooltipLayer) {
+          const globalPos = button.getGlobalPosition();
+          tooltipContainer.position.set(globalPos.x, globalPos.y - tooltipContainer.height - 2);
+        } else {
+          const local = e.getLocalPosition(button);
+          tooltipContainer.position.set(local.x, local.y - tooltipContainer.height - 2);
+        }
       }
     });
 
     button.on('pointerout', () => {
       if (tooltipContainer) {
-        button.removeChild(tooltipContainer);
+        if (tooltipLayer) {
+          tooltipLayer.removeChild(tooltipContainer);
+        } else {
+          button.removeChild(tooltipContainer);
+        }
         tooltipContainer.destroy();
         tooltipContainer = null;
       }

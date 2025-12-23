@@ -23,7 +23,9 @@
 import * as PIXI from 'pixi.js';
 import { PixelCard } from './components/pixel-card';
 import { createPixelDialog, PixelDialogResult } from './components/pixel-dialog';
+import { createSaveDialog } from './components/save-dialog';
 import { createAnimationSettingsDialog } from './components/animation-settings-dialog';
+import { createProjectDialog } from './components/project-dialog';
 import { createSpritesheetSelectorDialog, SpritesheetSelectorDialogResult } from './components/spritesheet-selector-dialog';
 import { createSpriteSheetCard, SPRITESHEET_CONFIGS } from './components/spritesheet-card';
 import { SpriteSheetType } from './controllers/sprite-sheet-controller';
@@ -94,6 +96,7 @@ export class SpriteEditor {
   // Core dependencies
   private renderer: PIXI.Renderer;
   private scene: PIXI.Container;
+  private tooltipLayer: PIXI.Container;
 
   // UI Cards (only persistent cards stored here)
   private commanderBarCard?: CommanderBarCardResult;
@@ -150,6 +153,10 @@ export class SpriteEditor {
   constructor(options: SpriteEditorOptions) {
     this.renderer = options.renderer;
     this.scene = options.scene;
+
+    // Create tooltip layer (added to scene later to ensure it's on top)
+    this.tooltipLayer = new PIXI.Container();
+    this.tooltipLayer.label = 'tooltip-layer';
 
     // Initialize managers
     this.spriteSheetManager = new SpriteSheetManager();
@@ -693,31 +700,15 @@ export class SpriteEditor {
    * Handle PNG file drop
    */
   private async handlePngDrop(file: File): Promise<void> {
-    // Check for unsaved changes first
     if (this.spriteSheetManager.count() > 0 && this.hasUnsavedChanges) {
-      const dialog = createPixelDialog({
-        title: 'Save Current Project?',
-        message: 'You have unsaved changes. Save before importing?',
-        buttons: [
-          {
-            label: 'Save',
-            onClick: () => {
-              this.handleSave();
-              setTimeout(() => this.importPngAsSpritesheet(file), PERFORMANCE_CONSTANTS.DIALOG_ACTION_DELAY_MS);
-            }
-          },
-          {
-            label: 'Discard',
-            onClick: () => {
-              this.importPngAsSpritesheet(file);
-            }
-          },
-          {
-            label: 'Cancel',
-            onClick: () => {}
-          }
-        ],
-        renderer: this.renderer
+      const dialog = createSaveDialog({
+        renderer: this.renderer,
+        action: 'importing',
+        onSave: () => {
+          this.handleSave();
+          setTimeout(() => this.importPngAsSpritesheet(file), PERFORMANCE_CONSTANTS.DIALOG_ACTION_DELAY_MS);
+        },
+        onDontSave: () => this.importPngAsSpritesheet(file)
       });
       this.scene.addChild(dialog.container);
     } else {
@@ -892,31 +883,15 @@ export class SpriteEditor {
    * Handle project file drop
    */
   private async handleProjectDrop(file: File): Promise<void> {
-    // Check for unsaved changes first
     if (this.spriteSheetManager.count() > 0 && this.hasUnsavedChanges) {
-      const dialog = createPixelDialog({
-        title: 'Save Current Project?',
-        message: 'You have unsaved changes. Save before loading?',
-        buttons: [
-          {
-            label: 'Save',
-            onClick: async () => {
-              this.handleSave();
-              setTimeout(() => this.loadProjectFromFile(file), PERFORMANCE_CONSTANTS.DIALOG_ACTION_DELAY_MS);
-            }
-          },
-          {
-            label: 'Discard',
-            onClick: async () => {
-              await this.loadProjectFromFile(file);
-            }
-          },
-          {
-            label: 'Cancel',
-            onClick: () => {}
-          }
-        ],
-        renderer: this.renderer
+      const dialog = createSaveDialog({
+        renderer: this.renderer,
+        action: 'loading',
+        onSave: () => {
+          this.handleSave();
+          setTimeout(() => this.loadProjectFromFile(file), PERFORMANCE_CONSTANTS.DIALOG_ACTION_DELAY_MS);
+        },
+        onDontSave: () => this.loadProjectFromFile(file)
       });
       this.scene.addChild(dialog.container);
     } else {
@@ -1357,9 +1332,7 @@ export class SpriteEditor {
       scene: this.scene,
       explodeEffect: true, // Enable pixel explosion on PIKCELL bar buttons
       callbacks: {
-        onNew: () => this.handleNew(),
-        onSave: () => this.handleSave(),
-        onLoad: () => this.handleLoad(),
+        onProject: () => this.handleProject(),
         onExport: () => this.handleExport(),
         onNewAnimation: () => this.createAnimationPreview(),
         onSheets: () => this.showSpritesheetSelector(),
@@ -1454,6 +1427,9 @@ export class SpriteEditor {
 
     // Update info bar with initial state
     this.updateInfoBar();
+
+    // Add tooltip layer last so it's on top of all UI
+    this.scene.addChild(this.tooltipLayer);
   }
 
   /**
@@ -1588,7 +1564,9 @@ export class SpriteEditor {
         onFocus: (id) => {
           const preview = this.animationPreviewManager.get(id);
           if (preview) {
-            this.scene.setChildIndex(preview.card.container, this.scene.children.length - 1);
+            // Bring animation card to front (but keep tooltipLayer on top)
+            this.scene.addChild(preview.card.container);
+            this.scene.addChild(this.tooltipLayer);
             // Highlight animation frames on the spritesheet
             this.highlightAnimationFrames(id);
           }
@@ -1641,6 +1619,8 @@ export class SpriteEditor {
           }
         }
       });
+      // Keep tooltipLayer on top after restoring previews
+      this.scene.addChild(this.tooltipLayer);
     }
   }
 
@@ -1666,13 +1646,15 @@ export class SpriteEditor {
       spriteSheetController: activeSheet.sheetCard.controller,
       renderer: this.renderer,
       scene: this.scene,
+      tooltipLayer: this.tooltipLayer,
       x: 200,
       y: 150,
       onFocus: (id) => {
-        // Bring animation card to front
+        // Bring animation card to front (but keep tooltipLayer on top)
         const preview = this.animationPreviewManager.get(id);
         if (preview) {
-          this.scene.setChildIndex(preview.card.container, this.scene.children.length - 1);
+          this.scene.addChild(preview.card.container);
+          this.scene.addChild(this.tooltipLayer);
           // Highlight animation frames on the spritesheet
           this.highlightAnimationFrames(id);
         }
@@ -1732,6 +1714,8 @@ export class SpriteEditor {
 
     if (instance) {
       console.log(`Created animation preview: ${instance.id}`);
+      // Keep tooltipLayer on top of all UI
+      this.scene.addChild(this.tooltipLayer);
       this.saveProjectState();
     }
   }
@@ -1763,33 +1747,37 @@ export class SpriteEditor {
   }
 
   /**
+   * Handle "Project" button - shows project management dialog
+   */
+  private handleProject(): void {
+    const dialog = createProjectDialog({
+      renderer: this.renderer,
+      hasProject: this.spriteSheetManager.count() > 0,
+      hasUnsavedChanges: this.hasUnsavedChanges,
+      currentFilename: this.fileOperationsManager.getLastSavedFileName(),
+      projectName: this.projectState.name,
+      callbacks: {
+        onNew: () => this.handleNew(),
+        onOpen: () => this.handleLoad(),
+        onSave: (projectName: string) => this.handleSave(projectName)
+      }
+    });
+    this.scene.addChild(dialog.container);
+  }
+
+  /**
    * Handle "New" button
    */
   private async handleNew(): Promise<void> {
     if (this.spriteSheetManager.count() > 0 && this.hasUnsavedChanges) {
-      const dialog = createPixelDialog({
-        title: 'Save Current Project?',
-        message: 'You have unsaved changes. Save before creating new project?',
-        buttons: [
-          {
-            label: 'Save',
-            onClick: () => {
-              this.handleSave();
-              setTimeout(() => this.createNewProject(), PERFORMANCE_CONSTANTS.DIALOG_ACTION_DELAY_MS);
-            }
-          },
-          {
-            label: 'Discard',
-            onClick: () => {
-              this.createNewProject();
-            }
-          },
-          {
-            label: 'Cancel',
-            onClick: () => {}
-          }
-        ],
-        renderer: this.renderer
+      const dialog = createSaveDialog({
+        renderer: this.renderer,
+        action: 'creating new project',
+        onSave: () => {
+          this.handleSave();
+          setTimeout(() => this.createNewProject(), PERFORMANCE_CONSTANTS.DIALOG_ACTION_DELAY_MS);
+        },
+        onDontSave: () => this.createNewProject()
       });
       this.scene.addChild(dialog.container);
     } else {
@@ -1882,9 +1870,14 @@ export class SpriteEditor {
   /**
    * Handle "Save" button - uses FileOperationsManager
    */
-  private handleSave(): void {
+  private handleSave(projectName?: string): void {
     if (this.projectSaveTimer) {
       clearTimeout(this.projectSaveTimer);
+    }
+
+    // Update project name if provided
+    if (projectName) {
+      this.projectState.name = projectName;
     }
 
     // Update project state
@@ -1906,9 +1899,14 @@ export class SpriteEditor {
     const activeSheet = this.spriteSheetManager.getActive();
     this.projectState.activeSpriteSheetId = activeSheet?.id ?? null;
     this.projectState.selectedColorIndex = this.selectedColorIndex;
+    this.projectState.animationPreviews = this.animationPreviewManager.exportStates();
+
+    // Generate filename from project name
+    const safeName = (this.projectState.name || 'untitled').toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    const filename = `${safeName}.pikcell`;
 
     // Delegate to FileOperationsManager
-    this.fileOperationsManager.saveProject(this.projectState);
+    this.fileOperationsManager.saveProject(this.projectState, filename);
     this.hasUnsavedChanges = false;
   }
 
@@ -1917,29 +1915,14 @@ export class SpriteEditor {
    */
   private async handleLoad(): Promise<void> {
     if (this.spriteSheetManager.count() > 0 && this.hasUnsavedChanges) {
-      const dialog = createPixelDialog({
-        title: 'Save Current Project?',
-        message: 'You have unsaved changes. Save before loading?',
-        buttons: [
-          {
-            label: 'Save',
-            onClick: async () => {
-              this.handleSave();
-              setTimeout(() => this.loadProjectFile(), PERFORMANCE_CONSTANTS.DIALOG_ACTION_DELAY_MS);
-            }
-          },
-          {
-            label: 'Discard',
-            onClick: async () => {
-              await this.loadProjectFile();
-            }
-          },
-          {
-            label: 'Cancel',
-            onClick: () => {}
-          }
-        ],
-        renderer: this.renderer
+      const dialog = createSaveDialog({
+        renderer: this.renderer,
+        action: 'loading',
+        onSave: () => {
+          this.handleSave();
+          setTimeout(() => this.loadProjectFile(), PERFORMANCE_CONSTANTS.DIALOG_ACTION_DELAY_MS);
+        },
+        onDontSave: () => this.loadProjectFile()
       });
       this.scene.addChild(dialog.container);
     } else {

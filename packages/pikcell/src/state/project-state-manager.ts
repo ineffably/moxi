@@ -43,6 +43,7 @@ export interface ProjectState {
   version: number; // For future migrations
   createdAt: number; // Timestamp
   modifiedAt: number; // Timestamp
+  name: string; // Project name
   spriteSheets: SpriteSheetState[];
   activeSpriteSheetId: string | null;
   selectedColorIndex: number;
@@ -57,16 +58,17 @@ export interface ProjectState {
  * Handles saving and loading of sprite project data to/from localStorage
  */
 export class ProjectStateManager {
-  private static readonly CURRENT_VERSION = 3;
+  private static readonly CURRENT_VERSION = 4;
 
   /**
    * Create a new empty project
    */
-  static createEmptyProject(): ProjectState {
+  static createEmptyProject(name: string = 'Untitled'): ProjectState {
     return {
       version: this.CURRENT_VERSION,
       createdAt: Date.now(),
       modifiedAt: Date.now(),
+      name,
       spriteSheets: [],
       activeSpriteSheetId: null,
       selectedColorIndex: 0,
@@ -171,6 +173,13 @@ export class ProjectStateManager {
       });
       migrated.version = 3;
       console.log('Migrated project from v2 to v3 (added sprite sheet names)');
+    }
+
+    // v3 -> v4: Add project name field
+    if (migrated.version < 4) {
+      (migrated as ProjectState).name = (migrated as ProjectState).name || 'Untitled';
+      migrated.version = 4;
+      console.log('Migrated project from v3 to v4 (added project name)');
     }
 
     return migrated;

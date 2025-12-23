@@ -20,9 +20,7 @@ interface ButtonDef {
 }
 
 export interface CommanderBarCallbacks {
-  onNew?: () => void;
-  onSave?: () => void;
-  onLoad?: () => void;
+  onProject?: () => void;
   onExport?: () => void;
   onNewAnimation?: () => void;
   onSheets?: () => void;
@@ -53,9 +51,7 @@ export interface CommanderBarCardResult {
 
 /** Left-side button definitions */
 const LEFT_BUTTONS: ButtonDef[] = [
-  { label: 'New', callbackKey: 'onNew' },
-  { label: 'Save', callbackKey: 'onSave' },
-  { label: 'Load', callbackKey: 'onLoad' },
+  { label: 'Project', callbackKey: 'onProject' },
   { label: 'Export', callbackKey: 'onExport' },
   { label: 'Anim', callbackKey: 'onNewAnimation' },
   { label: 'Sheets', callbackKey: 'onSheets' }

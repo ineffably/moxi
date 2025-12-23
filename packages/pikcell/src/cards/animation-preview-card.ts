@@ -52,6 +52,8 @@ export interface AnimationPreviewCardOptions {
   onFrameHover?: (frameIndex: number, cellX: number, cellY: number) => void;
   /** Called when mouse leaves frame tick bars */
   onFrameHoverEnd?: () => void;
+  /** Container for tooltips (for z-ordering above other UI) */
+  tooltipLayer?: PIXI.Container;
 }
 
 export interface AnimationPreviewCardResult extends CardResult {
@@ -95,7 +97,8 @@ export function createAnimationPreviewCard(options: AnimationPreviewCardOptions)
     onShowSettings,
     onFrameChange,
     onFrameHover,
-    onFrameHoverEnd
+    onFrameHoverEnd,
+    tooltipLayer
   } = options;
 
   const config = ANIMATION_PREVIEW_CARD_CONFIG;
@@ -193,6 +196,8 @@ export function createAnimationPreviewCard(options: AnimationPreviewCardOptions)
       selectionMode: 'press',
       actionMode: 'click',
       label: 'X',
+      tooltip: 'Close',
+      tooltipLayer,
       onFocus,
       onClick: () => {
         onClose?.();
@@ -208,6 +213,8 @@ export function createAnimationPreviewCard(options: AnimationPreviewCardOptions)
       selectionMode: 'press',
       actionMode: 'click',
       label: '*',
+      tooltip: 'Settings',
+      tooltipLayer,
       onFocus,
       onClick: () => {
         onShowSettings?.();
@@ -225,6 +232,8 @@ export function createAnimationPreviewCard(options: AnimationPreviewCardOptions)
       selectionMode: 'press',
       actionMode: 'click',
       label: '<',
+      tooltip: 'Step Back',
+      tooltipLayer,
       onFocus,
       onClick: () => {
         animControllers[activeRowIndex]?.stepBackward();
@@ -240,6 +249,8 @@ export function createAnimationPreviewCard(options: AnimationPreviewCardOptions)
       selectionMode: 'press',
       actionMode: 'click',
       label: isPlaying ? '||' : '|>',
+      tooltip: isPlaying ? 'Pause' : 'Play',
+      tooltipLayer,
       onFocus,
       onClick: () => {
         animControllers[activeRowIndex]?.togglePlayback();
@@ -255,6 +266,8 @@ export function createAnimationPreviewCard(options: AnimationPreviewCardOptions)
       selectionMode: 'press',
       actionMode: 'click',
       label: '>',
+      tooltip: 'Step Forward',
+      tooltipLayer,
       onFocus,
       onClick: () => {
         animControllers[activeRowIndex]?.stepForward();

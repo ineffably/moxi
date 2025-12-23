@@ -46,6 +46,8 @@ export interface CreatePreviewOptions {
   onFrameHover?: (previewId: string, frameIndex: number, cellX: number, cellY: number) => void;
   /** Called when mouse leaves frame tick bars */
   onFrameHoverEnd?: (previewId: string) => void;
+  /** Container for tooltips (for z-ordering above other UI) */
+  tooltipLayer?: PIXI.Container;
 }
 
 /**
@@ -104,7 +106,8 @@ export class AnimationPreviewManager {
       },
       onFrameHoverEnd: () => {
         options.onFrameHoverEnd?.(id);
-      }
+      },
+      tooltipLayer: options.tooltipLayer
     });
 
     // Add to scene
