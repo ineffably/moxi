@@ -50,6 +50,12 @@ export class SpriteSheetController {
   private hoveredCellX: number = -1;
   private hoveredCellY: number = -1;
   private interactionSetup: boolean = false;
+  // Animation frame highlights - cells that are part of an animation sequence
+  private animationFrameHighlights: Array<{ cellX: number; cellY: number }> = [];
+  private animationFrameLabels: PIXI.Text[] = [];
+  private currentAnimationFrameIndex: number = -1;
+  // Selection mode - when active, shows overlay to indicate cells can be selected for animation
+  private selectionModeActive: boolean = false;
   private isDragging: boolean = false;
   private dragStartX: number = 0;
   private dragStartY: number = 0;
@@ -328,8 +334,10 @@ export class SpriteSheetController {
     }
 
     // Destroy old texture if exists
+    // Use destroy(false) to keep the source alive for animation sub-textures
+    // until they can be regenerated via onSpriteSheetUpdate()
     if (this.texture) {
-      this.texture.destroy(true);
+      this.texture.destroy(false);
     }
 
     // Create texture from canvas with nearest neighbor scaling
@@ -338,19 +346,73 @@ export class SpriteSheetController {
   }
 
   /**
-   * Draw the cell overlay (highlighting selected/hovered cells)
+   * Draw the cell overlay (highlighting selected/hovered cells and animation frames)
    */
   private drawCellOverlay() {
     if (!this.cellOverlay || !this.sprite) return;
 
     this.cellOverlay.clear();
 
+    // Clean up old animation frame labels
+    this.animationFrameLabels.forEach(label => label.destroy());
+    this.animationFrameLabels = [];
+
     const cellSize = SPRITE_SHEET_CONTROLLER_CONFIG.cellSize * this.scale;
     // Sprite has anchor (0.5, 0.5), so adjust for centered origin
     const spriteX = this.sprite.x - (this.config.width * this.scale) / 2;
     const spriteY = this.sprite.y - (this.config.height * this.scale) / 2;
+    const spriteWidth = this.config.width * this.scale;
+    const spriteHeight = this.config.height * this.scale;
 
-    // Draw selected cell first (strong highlight) - behind hover
+    // Draw selection mode overlay (semi-transparent tint over entire sprite)
+    if (this.selectionModeActive) {
+      // Draw a cyan/teal tinted overlay to indicate selection mode
+      this.cellOverlay.rect(spriteX, spriteY, spriteWidth, spriteHeight);
+      this.cellOverlay.fill({ color: 0x00ffff, alpha: 0.15 });
+
+      // Draw a border around the sprite to make selection mode obvious
+      this.cellOverlay.rect(spriteX, spriteY, spriteWidth, spriteHeight);
+      this.cellOverlay.stroke({ color: 0x00ffff, width: 2, alpha: 0.8 });
+    }
+
+    // Draw animation frame highlights first (behind everything)
+    if (this.animationFrameHighlights.length > 0) {
+      this.animationFrameHighlights.forEach((frame, index) => {
+        const x = spriteX + frame.cellX * cellSize;
+        const y = spriteY + frame.cellY * cellSize;
+        const isCurrentFrame = index === this.currentAnimationFrameIndex;
+
+        // Draw light gray fill for all frames
+        this.cellOverlay!.rect(x, y, cellSize, cellSize);
+        this.cellOverlay!.fill({ color: 0xffffff, alpha: isCurrentFrame ? 0.4 : 0.2 });
+
+        // Draw highlight border for current frame
+        if (isCurrentFrame) {
+          this.cellOverlay!.rect(x + 1, y + 1, cellSize - 2, cellSize - 2);
+          this.cellOverlay!.stroke({ color: 0x00ff00, width: 2, alpha: 0.9 });
+        }
+
+        // Add sequence number label with black outline for readability
+        const label = new PIXI.Text({
+          text: String(index + 1),
+          style: {
+            fontSize: Math.max(8, cellSize * 0.4),
+            fill: isCurrentFrame ? 0x00ff00 : 0xffffff,
+            fontFamily: 'Arial',
+            fontWeight: 'bold',
+            stroke: { color: 0x000000, width: 2 }
+          }
+        });
+        label.alpha = isCurrentFrame ? 1.0 : 0.85;
+        label.anchor.set(0.5);
+        label.x = x + cellSize / 2;
+        label.y = y + cellSize / 2;
+        this.cellOverlay!.parent?.addChild(label);
+        this.animationFrameLabels.push(label);
+      });
+    }
+
+    // Draw selected cell (strong highlight)
     if (this.selectedCellX >= 0 && this.selectedCellY >= 0) {
       this.cellOverlay.rect(
         spriteX + this.selectedCellX * cellSize,
@@ -588,6 +650,13 @@ export class SpriteSheetController {
   }
 
   /**
+   * Get the current texture (for creating sub-textures/frames)
+   */
+  public getTexture(): PIXI.Texture | null {
+    return this.texture;
+  }
+
+  /**
    * Set all pixel data (for loading)
    */
   public setPixelData(pixels: number[][]): void {
@@ -624,6 +693,67 @@ export class SpriteSheetController {
     this.sprite.y = (this.config.height * this.scale) / 2;
 
     // Redraw overlay to reflect new position
+    this.drawCellOverlay();
+  }
+
+  /**
+   * Set animation frame highlights to show which cells are part of an animation
+   * @param frames Array of cell coordinates in sequence order, or null to clear
+   * @param currentFrameIndex Index of the currently playing/selected frame (-1 for none)
+   */
+  public setAnimationFrameHighlights(frames: Array<{ cellX: number; cellY: number }> | null, currentFrameIndex: number = -1): void {
+    this.animationFrameHighlights = frames ?? [];
+    this.currentAnimationFrameIndex = currentFrameIndex;
+    this.drawCellOverlay();
+  }
+
+  /**
+   * Update just the current animation frame index (for playback updates)
+   */
+  public setCurrentAnimationFrameIndex(index: number): void {
+    this.currentAnimationFrameIndex = index;
+    this.drawCellOverlay();
+  }
+
+  /**
+   * Get the current animation frame highlights
+   */
+  public getAnimationFrameHighlights(): Array<{ cellX: number; cellY: number }> {
+    return this.animationFrameHighlights;
+  }
+
+  /**
+   * Set selection mode active state
+   * When active, shows a colored overlay to indicate cells can be selected for animation
+   */
+  public setSelectionMode(active: boolean): void {
+    this.selectionModeActive = active;
+    this.drawCellOverlay();
+  }
+
+  /**
+   * Get current selection mode state
+   */
+  public isSelectionModeActive(): boolean {
+    return this.selectionModeActive;
+  }
+
+  /**
+   * Set a hovered animation frame cell (for external hover events like animation tick bars)
+   * This will highlight the cell as if it were being hovered
+   */
+  public setHoveredAnimationFrame(cellX: number, cellY: number): void {
+    this.hoveredCellX = cellX;
+    this.hoveredCellY = cellY;
+    this.drawCellOverlay();
+  }
+
+  /**
+   * Clear the hovered animation frame cell
+   */
+  public clearHoveredAnimationFrame(): void {
+    this.hoveredCellX = -1;
+    this.hoveredCellY = -1;
     this.drawCellOverlay();
   }
 
@@ -692,6 +822,11 @@ export class SpriteSheetController {
       this.texture.destroy(true);
       this.texture = null;
     }
+    // Clean up animation frame labels
+    this.animationFrameLabels.forEach(label => label.destroy());
+    this.animationFrameLabels = [];
+    this.animationFrameHighlights = [];
+
     if (this.cellOverlay) {
       this.cellOverlay.destroy();
       this.cellOverlay = null;

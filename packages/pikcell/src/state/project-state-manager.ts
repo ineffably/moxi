@@ -7,6 +7,7 @@ import { SpriteSheetType } from '../controllers/sprite-sheet-controller';
 import { MainToolType } from '../cards/toolbar-card';
 import { ShapeType } from '../theming/tool-icons';
 import { PaletteType } from '../theming/palettes';
+import { AnimationPreviewState } from '../interfaces/animation-types';
 
 const PROJECT_STATE_KEY = 'sprite-editor-project';
 
@@ -24,6 +25,8 @@ export interface OperationResult<T = void> {
  */
 export interface SpriteSheetState {
   id: string;
+  /** User-visible name for the spritesheet */
+  name: string;
   type: SpriteSheetType;
   showGrid: boolean;
   pixels: number[][]; // 2D array of color indices
@@ -40,12 +43,14 @@ export interface ProjectState {
   version: number; // For future migrations
   createdAt: number; // Timestamp
   modifiedAt: number; // Timestamp
+  name: string; // Project name
   spriteSheets: SpriteSheetState[];
   activeSpriteSheetId: string | null;
   selectedColorIndex: number;
   selectedTool?: MainToolType; // Active tool (pencil, eraser, etc.)
   selectedShape?: ShapeType; // Active shape for shape tool
   selectedPalette?: PaletteType; // Active color palette
+  animationPreviews?: AnimationPreviewState[]; // Animation preview windows
 }
 
 /**
@@ -53,22 +58,24 @@ export interface ProjectState {
  * Handles saving and loading of sprite project data to/from localStorage
  */
 export class ProjectStateManager {
-  private static readonly CURRENT_VERSION = 1;
+  private static readonly CURRENT_VERSION = 4;
 
   /**
    * Create a new empty project
    */
-  static createEmptyProject(): ProjectState {
+  static createEmptyProject(name: string = 'Untitled'): ProjectState {
     return {
       version: this.CURRENT_VERSION,
       createdAt: Date.now(),
       modifiedAt: Date.now(),
+      name,
       spriteSheets: [],
       activeSpriteSheetId: null,
       selectedColorIndex: 0,
       selectedTool: 'pencil',
       selectedShape: 'square',
-      selectedPalette: 'pico8'
+      selectedPalette: 'pico8',
+      animationPreviews: []
     };
   }
 
@@ -145,12 +152,37 @@ export class ProjectStateManager {
    * Migrate old project versions to current version
    */
   private static migrateProject(state: ProjectState): ProjectState {
-    // For now, just update the version
-    // In the future, handle migrations between versions here
-    return {
-      ...state,
-      version: this.CURRENT_VERSION
-    };
+    let migrated = { ...state };
+
+    // v1 -> v2: Add animationPreviews field
+    if (migrated.version < 2) {
+      migrated.animationPreviews = [];
+      migrated.version = 2;
+      console.log('Migrated project from v1 to v2 (added animation previews)');
+    }
+
+    // v2 -> v3: Add name field to sprite sheets
+    if (migrated.version < 3) {
+      migrated.spriteSheets = migrated.spriteSheets.map((sheet, index) => {
+        // Generate a default name based on type and index
+        const typeName = sheet.type === 'PICO-8' ? 'PICO-8' : 'TIC-80';
+        return {
+          ...sheet,
+          name: sheet.name || `${typeName} Sheet ${index + 1}`
+        };
+      });
+      migrated.version = 3;
+      console.log('Migrated project from v2 to v3 (added sprite sheet names)');
+    }
+
+    // v3 -> v4: Add project name field
+    if (migrated.version < 4) {
+      (migrated as ProjectState).name = (migrated as ProjectState).name || 'Untitled';
+      migrated.version = 4;
+      console.log('Migrated project from v3 to v4 (added project name)');
+    }
+
+    return migrated;
   }
 
   /**

@@ -23,6 +23,10 @@
 import * as PIXI from 'pixi.js';
 import { PixelCard } from './components/pixel-card';
 import { createPixelDialog, PixelDialogResult } from './components/pixel-dialog';
+import { createSaveDialog } from './components/save-dialog';
+import { createAnimationSettingsDialog } from './components/animation-settings-dialog';
+import { createProjectDialog } from './components/project-dialog';
+import { createSpritesheetSelectorDialog, SpritesheetSelectorDialogResult } from './components/spritesheet-selector-dialog';
 import { createSpriteSheetCard, SPRITESHEET_CONFIGS } from './components/spritesheet-card';
 import { SpriteSheetType } from './controllers/sprite-sheet-controller';
 import { UIStateManager } from './state/ui-state-manager';
@@ -47,6 +51,7 @@ import { UIManager } from './managers/ui-manager';
 import { LayoutManager } from './managers/layout-manager';
 import { FileOperationsManager } from './managers/file-operations-manager';
 import { SpriteCardFactory } from './managers/sprite-card-factory';
+import { AnimationPreviewManager } from './managers/animation-preview-manager';
 import { SpriteSheetInstance } from './interfaces/managers';
 
 // Constants
@@ -55,6 +60,18 @@ import { CARD_IDS, getSpriteSheetCardId, getSpriteCardId, isSpriteCard } from '.
 
 // Utilities
 import { calculateCommanderBarHeight } from './utilities/card-utils';
+
+// Handlers
+import { createFileDropHandler, FileDropHandlerResult, readFileAsText } from './handlers/file-drop-handler';
+
+// Utilities for image import
+import {
+  importPngAsSpritesheet as importPngUtil,
+  detectSpriteSheetType,
+  getPaletteForType,
+  getDimensionsForType,
+  resizePixelData
+} from './utilities/image-import';
 
 export interface SpriteEditorOptions {
   renderer: PIXI.Renderer;
@@ -74,10 +91,12 @@ export class SpriteEditor {
   private fileOperationsManager: FileOperationsManager;
   private spriteCardFactory: SpriteCardFactory;
   private undoManager: UndoManager;
+  private animationPreviewManager: AnimationPreviewManager;
 
   // Core dependencies
   private renderer: PIXI.Renderer;
   private scene: PIXI.Container;
+  private tooltipLayer: PIXI.Container;
 
   // UI Cards (only persistent cards stored here)
   private commanderBarCard?: CommanderBarCardResult;
@@ -121,9 +140,23 @@ export class SpriteEditor {
   // Track current dialog for cleanup
   private currentDialog: PixelDialogResult | null = null;
 
+  // Track which animation preview is currently in selection mode
+  private animationSelectionModePreviewId: string | null = null;
+  private activeAnimationPreviewId: string | null = null;
+
+  // File drop handler for drag-and-drop imports
+  private fileDropHandler: FileDropHandlerResult | null = null;
+
+  // Drag overlay for visual feedback
+  private dragOverlay: PIXI.Graphics | null = null;
+
   constructor(options: SpriteEditorOptions) {
     this.renderer = options.renderer;
     this.scene = options.scene;
+
+    // Create tooltip layer (added to scene later to ensure it's on top)
+    this.tooltipLayer = new PIXI.Container();
+    this.tooltipLayer.label = 'tooltip-layer';
 
     // Initialize managers
     this.spriteSheetManager = new SpriteSheetManager();
@@ -131,6 +164,7 @@ export class SpriteEditor {
     this.layoutManager = new LayoutManager(this.renderer);
     this.fileOperationsManager = new FileOperationsManager();
     this.undoManager = new UndoManager({ maxHistory: 50 });
+    this.animationPreviewManager = new AnimationPreviewManager();
 
     // Initialize sprite card factory
     this.spriteCardFactory = new SpriteCardFactory({
@@ -152,6 +186,9 @@ export class SpriteEditor {
 
     // Setup beforeunload handler to save state when page closes
     this.setupBeforeUnloadHandler();
+
+    // Setup file drop handler for drag-and-drop imports
+    this.setupFileDropHandler();
 
     // Initialize or load project state
     const loadResult = ProjectStateManager.loadProject();
@@ -369,8 +406,8 @@ export class SpriteEditor {
       }
     }
 
-    // Create instance via manager (with saved ID if available)
-    const instance = this.spriteSheetManager.create(type, savedState?.id);
+    // Create instance via manager (with saved ID and name if available)
+    const instance = this.spriteSheetManager.create(type, savedState?.id, undefined, savedState?.name);
 
     // Function to make this sprite sheet active
     const makeThisSheetActive = () => {
@@ -395,6 +432,16 @@ export class SpriteEditor {
         console.log(`Hovering cell: ${cellX}, ${cellY}`);
       },
       onCellClick: (cellX, cellY) => {
+        // Check if we're in animation selection mode
+        if (this.animationSelectionModePreviewId) {
+          const preview = this.animationPreviewManager.get(this.animationSelectionModePreviewId);
+          if (preview) {
+            preview.card.handleCellClick(cellX, cellY);
+            this.saveProjectState();
+            return;
+          }
+        }
+        // Normal behavior: create/update sprite card for this cell
         createSpriteCardForCell(cellX, cellY);
         this.saveProjectState();
       },
@@ -604,6 +651,309 @@ export class SpriteEditor {
   }
 
   /**
+   * Setup file drop handler for drag-and-drop imports
+   */
+  private setupFileDropHandler(): void {
+    // Get the canvas element from the renderer
+    const canvas = this.renderer.canvas as HTMLCanvasElement;
+    if (!canvas) return;
+
+    this.fileDropHandler = createFileDropHandler({
+      dropTarget: canvas,
+      onPngDrop: (file) => this.handlePngDrop(file),
+      onProjectDrop: (file) => this.handleProjectDrop(file),
+      onDragEnter: () => this.showDragOverlay(),
+      onDragLeave: () => this.hideDragOverlay()
+    });
+  }
+
+  /**
+   * Show visual overlay when dragging files
+   */
+  private showDragOverlay(): void {
+    if (this.dragOverlay) return;
+
+    const theme = getTheme();
+    this.dragOverlay = new PIXI.Graphics();
+    this.dragOverlay.rect(0, 0, this.renderer.width, this.renderer.height);
+    this.dragOverlay.fill({ color: theme.accent, alpha: 0.2 });
+
+    // Border
+    this.dragOverlay.rect(8, 8, this.renderer.width - 16, this.renderer.height - 16);
+    this.dragOverlay.stroke({ color: theme.accent, width: 4 });
+
+    this.scene.addChild(this.dragOverlay);
+  }
+
+  /**
+   * Hide the drag overlay
+   */
+  private hideDragOverlay(): void {
+    if (this.dragOverlay) {
+      this.scene.removeChild(this.dragOverlay);
+      this.dragOverlay.destroy();
+      this.dragOverlay = null;
+    }
+  }
+
+  /**
+   * Handle PNG file drop
+   */
+  private async handlePngDrop(file: File): Promise<void> {
+    if (this.spriteSheetManager.count() > 0 && this.hasUnsavedChanges) {
+      const dialog = createSaveDialog({
+        renderer: this.renderer,
+        action: 'importing',
+        onSave: () => {
+          this.handleSave();
+          setTimeout(() => this.importPngAsSpritesheet(file), PERFORMANCE_CONSTANTS.DIALOG_ACTION_DELAY_MS);
+        },
+        onDontSave: () => this.importPngAsSpritesheet(file)
+      });
+      this.scene.addChild(dialog.container);
+    } else {
+      this.importPngAsSpritesheet(file);
+    }
+  }
+
+  /**
+   * Import a PNG file as a new spritesheet
+   */
+  private async importPngAsSpritesheet(file: File): Promise<void> {
+    try {
+      // Detect the best sprite sheet type based on image dimensions
+      const img = await this.loadImageForDetection(file);
+      const detectedType = detectSpriteSheetType(img.width, img.height);
+      const palette = getPaletteForType(detectedType);
+      const targetDims = getDimensionsForType(detectedType);
+
+      // Import the PNG
+      const imported = await importPngUtil(file, {
+        palette,
+        type: detectedType
+      });
+
+      // Resize to fit target dimensions if needed
+      const resizedPixels = resizePixelData(imported.pixels, targetDims.width, targetDims.height);
+
+      // Check for name conflicts
+      if (this.spriteSheetManager.hasName(imported.name)) {
+        this.showNameConflictDialog(imported.name, detectedType, resizedPixels);
+      } else {
+        this.createSpritesheetFromImport(imported.name, detectedType, resizedPixels);
+      }
+    } catch (error) {
+      console.error('Failed to import PNG:', error);
+      const dialog = createPixelDialog({
+        title: 'Import Error',
+        message: 'Failed to import PNG file.',
+        buttons: [{ label: 'OK', onClick: () => {} }],
+        renderer: this.renderer
+      });
+      this.scene.addChild(dialog.container);
+    }
+  }
+
+  /**
+   * Load image to detect dimensions without full import
+   */
+  private async loadImageForDetection(file: File): Promise<HTMLImageElement> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error('Failed to load image'));
+        img.src = reader.result as string;
+      };
+      reader.onerror = () => reject(new Error('Failed to read file'));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  /**
+   * Show dialog for name conflict resolution
+   */
+  private showNameConflictDialog(
+    name: string,
+    type: SpriteSheetType,
+    pixels: number[][]
+  ): void {
+    const dialog = createPixelDialog({
+      title: 'Name Conflict',
+      message: `A spritesheet named "${name}" already exists.`,
+      buttons: [
+        {
+          label: 'Rename',
+          onClick: () => {
+            const newName = prompt('Enter new name:', `${name} (2)`);
+            if (newName && !this.spriteSheetManager.hasName(newName)) {
+              this.createSpritesheetFromImport(newName, type, pixels);
+            } else if (newName) {
+              // Still a conflict, try again
+              this.showNameConflictDialog(newName, type, pixels);
+            }
+          }
+        },
+        {
+          label: 'Replace',
+          onClick: () => {
+            // Find and remove existing sheet with this name
+            const existing = this.spriteSheetManager.getByName(name);
+            if (existing) {
+              // Remove existing
+              if (existing.spriteCard) {
+                this.scene.removeChild(existing.spriteCard.card.container);
+              }
+              if (existing.sheetCard) {
+                this.scene.removeChild(existing.sheetCard.card.container);
+                existing.sheetCard.destroy();
+              }
+              this.spriteSheetManager.remove(existing.id);
+            }
+            this.createSpritesheetFromImport(name, type, pixels);
+          }
+        },
+        {
+          label: 'Cancel',
+          onClick: () => {}
+        }
+      ],
+      renderer: this.renderer
+    });
+    this.scene.addChild(dialog.container);
+  }
+
+  /**
+   * Create a new spritesheet from imported pixel data
+   */
+  private createSpritesheetFromImport(
+    name: string,
+    type: SpriteSheetType,
+    pixels: number[][]
+  ): void {
+    // Create the sprite sheet with the imported name
+    const instance = this.spriteSheetManager.create(type, undefined, undefined, name);
+
+    // Create sprite sheet card
+    const spriteSheetResult = createSpriteSheetCard({
+      config: SPRITESHEET_CONFIGS[type],
+      renderer: this.renderer,
+      showGrid: false,
+      onCellHover: (cellX, cellY) => {
+        console.log(`Hovering cell: ${cellX}, ${cellY}`);
+      },
+      onCellClick: (cellX, cellY) => {
+        if (this.animationSelectionModePreviewId) {
+          const preview = this.animationPreviewManager.get(this.animationSelectionModePreviewId);
+          if (preview) {
+            preview.card.handleCellClick(cellX, cellY);
+            this.saveProjectState();
+            return;
+          }
+        }
+        this.spriteCardFactory.createOrUpdate({ instance, cellX, cellY });
+        this.saveProjectState();
+      },
+      onFocus: () => this.activateInstance(instance)
+    });
+
+    this.scene.addChild(spriteSheetResult.card.container);
+    instance.sheetCard = spriteSheetResult;
+
+    // Set the imported pixel data
+    spriteSheetResult.controller.setPixelData(pixels);
+    spriteSheetResult.controller.render(spriteSheetResult.card.getContentContainer());
+
+    // Register with UIManager
+    const sheetIndex = this.spriteSheetManager.count() - 1;
+    this.registerCard(getSpriteSheetCardId(sheetIndex), spriteSheetResult.card);
+
+    // Set as active
+    this.spriteSheetManager.setActive(instance.id);
+
+    // Position the card
+    this.applyDefaultLayout();
+    this.saveProjectState();
+
+    console.log('🖼️ Imported PNG as spritesheet:', name);
+  }
+
+  /**
+   * Handle project file drop
+   */
+  private async handleProjectDrop(file: File): Promise<void> {
+    if (this.spriteSheetManager.count() > 0 && this.hasUnsavedChanges) {
+      const dialog = createSaveDialog({
+        renderer: this.renderer,
+        action: 'loading',
+        onSave: () => {
+          this.handleSave();
+          setTimeout(() => this.loadProjectFromFile(file), PERFORMANCE_CONSTANTS.DIALOG_ACTION_DELAY_MS);
+        },
+        onDontSave: () => this.loadProjectFromFile(file)
+      });
+      this.scene.addChild(dialog.container);
+    } else {
+      await this.loadProjectFromFile(file);
+    }
+  }
+
+  /**
+   * Load project from a dropped file
+   */
+  private async loadProjectFromFile(file: File): Promise<void> {
+    try {
+      const text = await readFileAsText(file);
+      const result = ProjectStateManager.importProjectJSON(text);
+
+      if (!result.success || !result.data) {
+        const dialog = createPixelDialog({
+          title: 'Import Error',
+          message: result.error || 'Failed to load project file.',
+          buttons: [{ label: 'OK', onClick: () => {} }],
+          renderer: this.renderer
+        });
+        this.scene.addChild(dialog.container);
+        return;
+      }
+
+      // Clear existing work
+      this.spriteSheetManager.getAll().forEach((instance, index) => {
+        if (instance.spriteCard) {
+          this.scene.removeChild(instance.spriteCard.card.container);
+          this.uiManager.unregisterCard(getSpriteCardId(index));
+        }
+        this.spriteCardFactory.remove(instance);
+        if (instance.sheetCard) {
+          instance.sheetCard.controller.destroy();
+          this.scene.removeChild(instance.sheetCard.card.container);
+          this.uiManager.unregisterCard(getSpriteSheetCardId(index));
+        }
+      });
+
+      this.spriteSheetManager.clear();
+      this.projectState = result.data;
+      this.hasUnsavedChanges = false;
+
+      ProjectStateManager.saveProject(this.projectState);
+      this.loadProjectState();
+      this.centerActiveSheetCell();
+
+      console.log('📂 Project loaded from dropped file:', file.name);
+    } catch (error) {
+      console.error('Failed to load dropped project file:', error);
+      const dialog = createPixelDialog({
+        title: 'Import Error',
+        message: 'Failed to read project file.',
+        buttons: [{ label: 'OK', onClick: () => {} }],
+        renderer: this.renderer
+      });
+      this.scene.addChild(dialog.container);
+    }
+  }
+
+  /**
    * Handle undo operation
    */
   private handleUndo(): void {
@@ -665,6 +1015,8 @@ export class SpriteEditor {
       instance.spriteCard.redraw();
     }
     instance.sheetCard.controller.render(instance.sheetCard.card.getContentContainer());
+    // Update animation previews to reflect pixel changes
+    this.animationPreviewManager.onSpriteSheetUpdate(instance.id);
   }
 
   /**
@@ -680,78 +1032,152 @@ export class SpriteEditor {
   }
 
   /**
-   * Handle copy operation - copy selected pixels to clipboard
+   * Handle copy operation - copy selected pixels or cell to clipboard
    */
   private handleCopy(): void {
     const activeInstance = this.spriteSheetManager.getActive();
-    if (!activeInstance?.spriteCard || !activeInstance.spriteController) return;
+    if (!activeInstance) return;
 
-    const selection = activeInstance.spriteCard.getSelection();
-    if (!selection) return;
+    // First try: copy pixel selection from sprite editor
+    if (activeInstance.spriteCard && activeInstance.spriteController) {
+      const selection = activeInstance.spriteCard.getSelection();
+      if (selection) {
+        const { minX, minY, maxX, maxY } = this.getNormalizedSelection(selection);
+        const width = maxX - minX + 1;
+        const height = maxY - minY + 1;
 
-    const { minX, minY, maxX, maxY } = this.getNormalizedSelection(selection);
-    const width = maxX - minX + 1;
-    const height = maxY - minY + 1;
+        // Copy pixels from selection
+        const pixels: number[][] = [];
+        for (let y = 0; y < height; y++) {
+          const row: number[] = [];
+          for (let x = 0; x < width; x++) {
+            row.push(activeInstance.spriteController.getPixel(minX + x, minY + y));
+          }
+          pixels.push(row);
+        }
 
-    // Copy pixels from selection
-    const pixels: number[][] = [];
-    for (let y = 0; y < height; y++) {
-      const row: number[] = [];
-      for (let x = 0; x < width; x++) {
-        row.push(activeInstance.spriteController.getPixel(minX + x, minY + y));
+        this.clipboard = { width, height, pixels };
+        console.log(`Copied ${width}x${height} pixels to clipboard`);
+        return;
       }
-      pixels.push(row);
     }
 
-    this.clipboard = { width, height, pixels };
-    console.log(`Copied ${width}x${height} pixels to clipboard`);
+    // Second try: copy cell from spritesheet
+    if (activeInstance.sheetCard) {
+      const selectedCell = activeInstance.sheetCard.controller.getSelectedCell();
+      if (selectedCell.x >= 0 && selectedCell.y >= 0) {
+        const cellSize = 8; // 8x8 cell
+        const startX = selectedCell.x * cellSize;
+        const startY = selectedCell.y * cellSize;
+
+        // Copy pixels from cell
+        const pixels: number[][] = [];
+        for (let y = 0; y < cellSize; y++) {
+          const row: number[] = [];
+          for (let x = 0; x < cellSize; x++) {
+            row.push(activeInstance.sheetCard.controller.getPixel(startX + x, startY + y));
+          }
+          pixels.push(row);
+        }
+
+        this.clipboard = { width: cellSize, height: cellSize, pixels };
+        console.log(`Copied cell (${selectedCell.x}, ${selectedCell.y}) to clipboard`);
+      }
+    }
   }
 
   /**
-   * Handle paste operation - paste clipboard at selection or origin
+   * Handle paste operation - paste clipboard at selection, cell, or origin
    */
   private handlePaste(): void {
     if (!this.clipboard) return;
 
     const activeInstance = this.spriteSheetManager.getActive();
-    if (!activeInstance?.spriteCard || !activeInstance.spriteController) return;
+    if (!activeInstance) return;
 
-    const selection = activeInstance.spriteCard.getSelection();
+    // First try: paste to pixel selection in sprite editor
+    if (activeInstance.spriteCard && activeInstance.spriteController) {
+      const selection = activeInstance.spriteCard.getSelection();
+      if (selection) {
+        const startX = Math.min(selection.x1, selection.x2);
+        const startY = Math.min(selection.y1, selection.y2);
 
-    // Paste at selection top-left, or at origin if no selection
-    const startX = selection ? Math.min(selection.x1, selection.x2) : 0;
-    const startY = selection ? Math.min(selection.y1, selection.y2) : 0;
+        // Begin undo stroke
+        this.undoManager.beginStroke(activeInstance.id);
 
-    // Begin undo stroke
-    this.undoManager.beginStroke(activeInstance.id);
+        // Paste pixels (index 0 is transparent - don't overwrite destination)
+        for (let y = 0; y < this.clipboard.height; y++) {
+          for (let x = 0; x < this.clipboard.width; x++) {
+            const destX = startX + x;
+            const destY = startY + y;
 
-    // Paste pixels (index 0 is transparent - don't overwrite destination)
-    for (let y = 0; y < this.clipboard.height; y++) {
-      for (let x = 0; x < this.clipboard.width; x++) {
-        const destX = startX + x;
-        const destY = startY + y;
+            // Skip if out of bounds (8x8 sprite editor)
+            if (destX < 0 || destX >= 8 || destY < 0 || destY >= 8) continue;
 
-        // Skip if out of bounds
-        if (destX < 0 || destX >= 8 || destY < 0 || destY >= 8) continue;
+            const newColorIndex = this.clipboard.pixels[y][x];
 
-        const newColorIndex = this.clipboard.pixels[y][x];
+            // Skip transparent pixels (index 0) - they don't overwrite
+            if (newColorIndex === 0) continue;
 
-        // Skip transparent pixels (index 0) - they don't overwrite
-        if (newColorIndex === 0) continue;
+            const oldColorIndex = activeInstance.spriteController.getPixel(destX, destY);
 
-        const oldColorIndex = activeInstance.spriteController.getPixel(destX, destY);
-
-        if (oldColorIndex !== newColorIndex) {
-          this.undoManager.recordPixelChange(destX, destY, oldColorIndex, newColorIndex);
-          activeInstance.spriteController.setPixel(destX, destY, newColorIndex);
+            if (oldColorIndex !== newColorIndex) {
+              this.undoManager.recordPixelChange(destX, destY, oldColorIndex, newColorIndex);
+              activeInstance.spriteController.setPixel(destX, destY, newColorIndex);
+            }
+          }
         }
+
+        this.undoManager.endStroke();
+        this.refreshInstance(activeInstance);
+        this.saveProjectState();
+        console.log(`Pasted ${this.clipboard.width}x${this.clipboard.height} pixels at (${startX}, ${startY})`);
+        return;
       }
     }
 
-    this.undoManager.endStroke();
-    this.refreshInstance(activeInstance);
-    this.saveProjectState();
-    console.log(`Pasted ${this.clipboard.width}x${this.clipboard.height} pixels at (${startX}, ${startY})`);
+    // Second try: paste to selected cell on spritesheet
+    if (activeInstance.sheetCard) {
+      const selectedCell = activeInstance.sheetCard.controller.getSelectedCell();
+      if (selectedCell.x >= 0 && selectedCell.y >= 0) {
+        const cellSize = 8;
+        const startX = selectedCell.x * cellSize;
+        const startY = selectedCell.y * cellSize;
+        const sheetWidth = activeInstance.sheetCard.controller.getConfig().width;
+        const sheetHeight = activeInstance.sheetCard.controller.getConfig().height;
+
+        // Begin undo stroke
+        this.undoManager.beginStroke(activeInstance.id);
+
+        // Paste pixels to the cell
+        for (let y = 0; y < this.clipboard.height; y++) {
+          for (let x = 0; x < this.clipboard.width; x++) {
+            const destX = startX + x;
+            const destY = startY + y;
+
+            // Skip if out of bounds
+            if (destX < 0 || destX >= sheetWidth || destY < 0 || destY >= sheetHeight) continue;
+
+            const newColorIndex = this.clipboard.pixels[y][x];
+            const oldColorIndex = activeInstance.sheetCard.controller.getPixel(destX, destY);
+
+            if (oldColorIndex !== newColorIndex) {
+              this.undoManager.recordPixelChange(destX, destY, oldColorIndex, newColorIndex);
+              activeInstance.sheetCard.controller.setPixel(destX, destY, newColorIndex);
+            }
+          }
+        }
+
+        this.undoManager.endStroke();
+
+        // Refresh the sheet card display
+        activeInstance.sheetCard.controller.render(activeInstance.sheetCard.card.getContentContainer());
+        // Update animation previews
+        this.animationPreviewManager.onSpriteSheetUpdate(activeInstance.id);
+        this.saveProjectState();
+        console.log(`Pasted cell to (${selectedCell.x}, ${selectedCell.y})`);
+      }
+    }
   }
 
   /**
@@ -898,18 +1324,18 @@ export class SpriteEditor {
     this.scene.removeChildren();
     this.renderer.background.color = getTheme().workspace;
 
-    // Create commander bar
+    // Create commander bar - at top-left corner (0, 0)
     this.commanderBarCard = createCommanderBarCard({
-      x: px(GRID.margin),
-      y: px(GRID.margin),
+      x: 0,
+      y: 0,
       renderer: this.renderer,
       scene: this.scene,
       explodeEffect: true, // Enable pixel explosion on PIKCELL bar buttons
       callbacks: {
-        onNew: () => this.handleNew(),
-        onSave: () => this.handleSave(),
-        onLoad: () => this.handleLoad(),
+        onProject: () => this.handleProject(),
         onExport: () => this.handleExport(),
+        onNewAnimation: () => this.createAnimationPreview(),
+        onSheets: () => this.showSpritesheetSelector(),
         onApplyLayout: () => this.applyDefaultLayout(),
         onSaveLayoutSlot: (slot) => this.handleSaveLayoutSlot(slot),
         onLoadLayoutSlot: (slot) => this.handleLoadLayoutSlot(slot),
@@ -921,12 +1347,12 @@ export class SpriteEditor {
     this.scene.addChild(this.commanderBarCard.card.container);
     this.registerCard(CARD_IDS.COMMANDER, this.commanderBarCard.card);
 
-    // Create palette card
+    // Create palette card - below commander bar, at left edge
     const commanderBarHeight = calculateCommanderBarHeight();
-    const topOffset = px(GRID.margin) + commanderBarHeight + px(GRID.gap * 2);
+    const topOffset = commanderBarHeight + px(1); // 1 grid unit gap below commander
 
     this.paletteCard = createPaletteCard({
-      x: px(GRID.margin),
+      x: 0,
       y: topOffset,
       renderer: this.renderer,
       palette: this.currentPalette,
@@ -1001,6 +1427,9 @@ export class SpriteEditor {
 
     // Update info bar with initial state
     this.updateInfoBar();
+
+    // Add tooltip layer last so it's on top of all UI
+    this.scene.addChild(this.tooltipLayer);
   }
 
   /**
@@ -1018,6 +1447,7 @@ export class SpriteEditor {
         const cell = instance.sheetCard.controller.getSelectedCell();
         const state: SpriteSheetState = {
           id: instance.id,
+          name: instance.name,
           type: instance.sheetCard.controller.getConfig().type,
           showGrid: false,
           pixels: instance.sheetCard.controller.getPixelData(),
@@ -1035,6 +1465,7 @@ export class SpriteEditor {
       this.projectState.selectedTool = this.currentTool;
       this.projectState.selectedShape = this.currentShapeType;
       this.projectState.selectedPalette = this.currentPaletteType;
+      this.projectState.animationPreviews = this.animationPreviewManager.exportStates();
 
       const saveResult = ProjectStateManager.saveProject(this.projectState);
       if (!saveResult.success) {
@@ -1051,6 +1482,7 @@ export class SpriteEditor {
       const cell = instance.sheetCard.controller.getSelectedCell();
       const state: SpriteSheetState = {
         id: instance.id,
+        name: instance.name,
         type: instance.sheetCard.controller.getConfig().type,
         showGrid: false,
         pixels: instance.sheetCard.controller.getPixelData(),
@@ -1067,6 +1499,8 @@ export class SpriteEditor {
     this.projectState.selectedColorIndex = this.selectedColorIndex;
     this.projectState.selectedTool = this.currentTool;
     this.projectState.selectedShape = this.currentShapeType;
+    this.projectState.selectedPalette = this.currentPaletteType;
+    this.projectState.animationPreviews = this.animationPreviewManager.exportStates();
 
     const saveResult = ProjectStateManager.saveProject(this.projectState);
     if (!saveResult.success) {
@@ -1117,36 +1551,233 @@ export class SpriteEditor {
 
       this.createNewSpriteSheet(sheetState.type, sheetState.showGrid, sheetState);
     });
+
+    // Restore animation previews
+    if (this.projectState.animationPreviews && this.projectState.animationPreviews.length > 0) {
+      this.animationPreviewManager.importStates(this.projectState.animationPreviews, {
+        renderer: this.renderer,
+        scene: this.scene,
+        getSpriteSheetController: (id) => {
+          const instance = this.spriteSheetManager.get(id);
+          return instance?.sheetCard?.controller ?? null;
+        },
+        onFocus: (id) => {
+          const preview = this.animationPreviewManager.get(id);
+          if (preview) {
+            // Bring animation card to front (but keep tooltipLayer on top)
+            this.scene.addChild(preview.card.container);
+            this.scene.addChild(this.tooltipLayer);
+            // Highlight animation frames on the spritesheet
+            this.highlightAnimationFrames(id);
+          }
+        },
+        onSelectionModeChange: (previewId, isSelecting) => {
+          if (isSelecting) {
+            this.animationSelectionModePreviewId = previewId;
+          } else if (this.animationSelectionModePreviewId === previewId) {
+            this.animationSelectionModePreviewId = null;
+          }
+          // Update spritesheet selection mode overlay
+          const activeSheet = this.spriteSheetManager.getActive();
+          if (activeSheet?.sheetCard) {
+            activeSheet.sheetCard.controller.setSelectionMode(isSelecting);
+          }
+          this.saveProjectState();
+        },
+        onShowSettings: (previewId) => {
+          this.showAnimationSettings(previewId);
+        },
+        onStateChange: () => {
+          // Update spritesheet highlights when frames change
+          if (this.activeAnimationPreviewId) {
+            this.highlightAnimationFrames(this.activeAnimationPreviewId);
+          }
+          this.saveProjectState();
+        },
+        onFrameChange: (previewId, frameIndex) => {
+          // Update spritesheet highlight to show current frame during playback
+          if (this.activeAnimationPreviewId === previewId) {
+            this.updateAnimationFrameHighlight(previewId, frameIndex);
+          }
+        },
+        onFrameHover: (previewId, frameIndex, cellX, cellY) => {
+          // Highlight the hovered cell on the spritesheet
+          const preview = this.animationPreviewManager.get(previewId);
+          if (!preview) return;
+          const sheetInstance = this.spriteSheetManager.get(preview.spriteSheetId);
+          if (sheetInstance?.sheetCard?.controller) {
+            sheetInstance.sheetCard.controller.setHoveredAnimationFrame(cellX, cellY);
+          }
+        },
+        onFrameHoverEnd: (previewId) => {
+          // Clear the hover highlight on the spritesheet
+          const preview = this.animationPreviewManager.get(previewId);
+          if (!preview) return;
+          const sheetInstance = this.spriteSheetManager.get(preview.spriteSheetId);
+          if (sheetInstance?.sheetCard?.controller) {
+            sheetInstance.sheetCard.controller.clearHoveredAnimationFrame();
+          }
+        }
+      });
+      // Keep tooltipLayer on top after restoring previews
+      this.scene.addChild(this.tooltipLayer);
+    }
+  }
+
+  /**
+   * Create a new animation preview window
+   */
+  private createAnimationPreview(): void {
+    const activeSheet = this.spriteSheetManager.getActive();
+    if (!activeSheet || !activeSheet.sheetCard) {
+      // Show dialog if no sprite sheet exists
+      const dialog = createPixelDialog({
+        title: 'No Sprite Sheet',
+        message: 'Create a sprite sheet first before creating animations.',
+        buttons: [{ label: 'OK', onClick: () => {} }],
+        renderer: this.renderer
+      });
+      this.scene.addChild(dialog.container);
+      return;
+    }
+
+    const instance = this.animationPreviewManager.create({
+      spriteSheetId: activeSheet.id,
+      spriteSheetController: activeSheet.sheetCard.controller,
+      renderer: this.renderer,
+      scene: this.scene,
+      tooltipLayer: this.tooltipLayer,
+      x: 200,
+      y: 150,
+      onFocus: (id) => {
+        // Bring animation card to front (but keep tooltipLayer on top)
+        const preview = this.animationPreviewManager.get(id);
+        if (preview) {
+          this.scene.addChild(preview.card.container);
+          this.scene.addChild(this.tooltipLayer);
+          // Highlight animation frames on the spritesheet
+          this.highlightAnimationFrames(id);
+        }
+      },
+      onSelectionModeChange: (previewId, isSelecting) => {
+        if (isSelecting) {
+          // This preview is now in selection mode
+          this.animationSelectionModePreviewId = previewId;
+        } else {
+          // Exiting selection mode
+          if (this.animationSelectionModePreviewId === previewId) {
+            this.animationSelectionModePreviewId = null;
+          }
+        }
+        // Update spritesheet selection mode overlay
+        const activeSheet = this.spriteSheetManager.getActive();
+        if (activeSheet?.sheetCard) {
+          activeSheet.sheetCard.controller.setSelectionMode(isSelecting);
+        }
+        this.saveProjectState();
+      },
+      onShowSettings: (previewId) => {
+        this.showAnimationSettings(previewId);
+      },
+      onStateChange: () => {
+        // Update spritesheet highlights when frames change
+        if (this.activeAnimationPreviewId) {
+          this.highlightAnimationFrames(this.activeAnimationPreviewId);
+        }
+        this.saveProjectState();
+      },
+      onFrameChange: (previewId, frameIndex) => {
+        // Update spritesheet highlight to show current frame during playback
+        if (this.activeAnimationPreviewId === previewId) {
+          this.updateAnimationFrameHighlight(previewId, frameIndex);
+        }
+      },
+      onFrameHover: (previewId, frameIndex, cellX, cellY) => {
+        // Highlight the hovered cell on the spritesheet
+        const preview = this.animationPreviewManager.get(previewId);
+        if (!preview) return;
+        const sheetInstance = this.spriteSheetManager.get(preview.spriteSheetId);
+        if (sheetInstance?.sheetCard?.controller) {
+          sheetInstance.sheetCard.controller.setHoveredAnimationFrame(cellX, cellY);
+        }
+      },
+      onFrameHoverEnd: (previewId) => {
+        // Clear the hover highlight on the spritesheet
+        const preview = this.animationPreviewManager.get(previewId);
+        if (!preview) return;
+        const sheetInstance = this.spriteSheetManager.get(preview.spriteSheetId);
+        if (sheetInstance?.sheetCard?.controller) {
+          sheetInstance.sheetCard.controller.clearHoveredAnimationFrame();
+        }
+      }
+    });
+
+    if (instance) {
+      console.log(`Created animation preview: ${instance.id}`);
+      // Keep tooltipLayer on top of all UI
+      this.scene.addChild(this.tooltipLayer);
+      this.saveProjectState();
+    }
+  }
+
+  /**
+   * Show animation settings dialog for a preview
+   */
+  private showAnimationSettings(previewId: string): void {
+    const preview = this.animationPreviewManager.get(previewId);
+    if (!preview) return;
+
+    const sequence = preview.card.getSequence();
+
+    const dialog = createAnimationSettingsDialog({
+      sequence,
+      renderer: this.renderer,
+      onApply: (updatedSequence) => {
+        // Update the preview's sequence
+        preview.card.setSequence(updatedSequence);
+        this.saveProjectState();
+        console.log(`Animation settings updated for ${previewId}`);
+      },
+      onCancel: () => {
+        console.log('Animation settings cancelled');
+      }
+    });
+
+    this.scene.addChild(dialog.container);
+  }
+
+  /**
+   * Handle "Project" button - shows project management dialog
+   */
+  private handleProject(): void {
+    const dialog = createProjectDialog({
+      renderer: this.renderer,
+      hasProject: this.spriteSheetManager.count() > 0,
+      hasUnsavedChanges: this.hasUnsavedChanges,
+      currentFilename: this.fileOperationsManager.getLastSavedFileName(),
+      projectName: this.projectState.name,
+      callbacks: {
+        onNew: () => this.handleNew(),
+        onOpen: () => this.handleLoad(),
+        onSave: (projectName: string) => this.handleSave(projectName)
+      }
+    });
+    this.scene.addChild(dialog.container);
   }
 
   /**
    * Handle "New" button
    */
   private async handleNew(): Promise<void> {
-    if (this.spriteSheetManager.count() > 0) {
-      const dialog = createPixelDialog({
-        title: 'Save Current Project?',
-        message: 'You have unsaved work. Save before creating new project?',
-        buttons: [
-          {
-            label: 'Save',
-            onClick: () => {
-              this.handleSave();
-              setTimeout(() => this.createNewProject(), PERFORMANCE_CONSTANTS.DIALOG_ACTION_DELAY_MS);
-            }
-          },
-          {
-            label: 'Discard',
-            onClick: () => {
-              this.createNewProject();
-            }
-          },
-          {
-            label: 'Cancel',
-            onClick: () => {}
-          }
-        ],
-        renderer: this.renderer
+    if (this.spriteSheetManager.count() > 0 && this.hasUnsavedChanges) {
+      const dialog = createSaveDialog({
+        renderer: this.renderer,
+        action: 'creating new project',
+        onSave: () => {
+          this.handleSave();
+          setTimeout(() => this.createNewProject(), PERFORMANCE_CONSTANTS.DIALOG_ACTION_DELAY_MS);
+        },
+        onDontSave: () => this.createNewProject()
       });
       this.scene.addChild(dialog.container);
     } else {
@@ -1184,6 +1815,7 @@ export class SpriteEditor {
     });
 
     this.spriteSheetManager.clear();
+    this.animationPreviewManager.clear();
     this.projectState = ProjectStateManager.createEmptyProject();
 
     // Reset palette to default
@@ -1238,9 +1870,14 @@ export class SpriteEditor {
   /**
    * Handle "Save" button - uses FileOperationsManager
    */
-  private handleSave(): void {
+  private handleSave(projectName?: string): void {
     if (this.projectSaveTimer) {
       clearTimeout(this.projectSaveTimer);
+    }
+
+    // Update project name if provided
+    if (projectName) {
+      this.projectState.name = projectName;
     }
 
     // Update project state
@@ -1248,6 +1885,7 @@ export class SpriteEditor {
       const cell = instance.sheetCard.controller.getSelectedCell();
       return {
         id: instance.id,
+        name: instance.name,
         type: instance.sheetCard.controller.getConfig().type,
         showGrid: false,
         pixels: instance.sheetCard.controller.getPixelData(),
@@ -1261,9 +1899,14 @@ export class SpriteEditor {
     const activeSheet = this.spriteSheetManager.getActive();
     this.projectState.activeSpriteSheetId = activeSheet?.id ?? null;
     this.projectState.selectedColorIndex = this.selectedColorIndex;
+    this.projectState.animationPreviews = this.animationPreviewManager.exportStates();
+
+    // Generate filename from project name
+    const safeName = (this.projectState.name || 'untitled').toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    const filename = `${safeName}.pikcell`;
 
     // Delegate to FileOperationsManager
-    this.fileOperationsManager.saveProject(this.projectState);
+    this.fileOperationsManager.saveProject(this.projectState, filename);
     this.hasUnsavedChanges = false;
   }
 
@@ -1272,22 +1915,14 @@ export class SpriteEditor {
    */
   private async handleLoad(): Promise<void> {
     if (this.spriteSheetManager.count() > 0 && this.hasUnsavedChanges) {
-      const dialog = createPixelDialog({
-        title: 'Unsaved Changes',
-        message: 'Loading will replace current project. Continue?',
-        buttons: [
-          {
-            label: 'Continue',
-            onClick: async () => {
-              await this.loadProjectFile();
-            }
-          },
-          {
-            label: 'Cancel',
-            onClick: () => {}
-          }
-        ],
-        renderer: this.renderer
+      const dialog = createSaveDialog({
+        renderer: this.renderer,
+        action: 'loading',
+        onSave: () => {
+          this.handleSave();
+          setTimeout(() => this.loadProjectFile(), PERFORMANCE_CONSTANTS.DIALOG_ACTION_DELAY_MS);
+        },
+        onDontSave: () => this.loadProjectFile()
       });
       this.scene.addChild(dialog.container);
     } else {
@@ -1363,6 +1998,112 @@ export class SpriteEditor {
 
     // Delegate to FileOperationsManager
     this.fileOperationsManager.exportPNG(activeSheet.sheetCard.controller);
+  }
+
+  /**
+   * Show spritesheet selector dialog
+   */
+  private showSpritesheetSelector(): void {
+    const dialog = createSpritesheetSelectorDialog({
+      renderer: this.renderer,
+      getSpritesheets: () => this.spriteSheetManager.getAll(),
+      getActiveId: () => this.spriteSheetManager.getActive()?.id ?? null,
+      onSelect: (id) => {
+        const instance = this.spriteSheetManager.get(id);
+        if (instance) {
+          this.activateInstance(instance);
+        }
+      },
+      onRename: (id, newName) => {
+        this.spriteSheetManager.setName(id, newName);
+        this.saveProjectState();
+      },
+      onDelete: (id) => {
+        // Close sprite card if open for this sheet
+        const instance = this.spriteSheetManager.get(id);
+        if (instance?.spriteCard) {
+          this.scene.removeChild(instance.spriteCard.card.container);
+          instance.spriteCard.destroy();
+        }
+
+        // Remove from scene
+        if (instance?.sheetCard) {
+          this.scene.removeChild(instance.sheetCard.card.container);
+          instance.sheetCard.destroy();
+        }
+
+        // Remove from manager
+        this.spriteSheetManager.remove(id);
+        this.saveProjectState();
+      },
+      onAddNew: (type) => {
+        this.createNewSpriteSheet(type, false);
+        this.saveProjectState();
+      },
+      onClose: () => {}
+    });
+
+    this.scene.addChild(dialog.container);
+  }
+
+  /**
+   * Highlight animation frames on the spritesheet
+   * Shows which cells are part of an animation sequence with numbers
+   */
+  private highlightAnimationFrames(animationId: string): void {
+    const preview = this.animationPreviewManager.get(animationId);
+    if (!preview) return;
+
+    // Get the spritesheet for this animation
+    const sheetId = preview.spriteSheetId;
+    const sheetInstance = this.spriteSheetManager.get(sheetId);
+    if (!sheetInstance?.sheetCard?.controller) return;
+
+    // Get the animation frames and current frame index
+    const sequence = preview.card.getSequence();
+    const frames = sequence.frames.map(f => ({ cellX: f.cellX, cellY: f.cellY }));
+    const currentFrameIndex = preview.card.getCurrentFrameIndex();
+
+    // Clear highlights on all other spritesheets
+    this.spriteSheetManager.getAll().forEach(instance => {
+      if (instance.id !== sheetId && instance.sheetCard?.controller) {
+        instance.sheetCard.controller.setAnimationFrameHighlights(null);
+      }
+    });
+
+    // Set highlights on this spritesheet with current frame
+    sheetInstance.sheetCard.controller.setAnimationFrameHighlights(frames, currentFrameIndex);
+
+    // Store the active animation id for frame updates
+    this.activeAnimationPreviewId = animationId;
+  }
+
+  /**
+   * Clear animation frame highlights from all spritesheets
+   */
+  private clearAnimationFrameHighlights(): void {
+    this.spriteSheetManager.getAll().forEach(instance => {
+      if (instance.sheetCard?.controller) {
+        instance.sheetCard.controller.setAnimationFrameHighlights(null);
+      }
+    });
+  }
+
+  /**
+   * Update just the current frame highlight during animation playback
+   * More efficient than calling highlightAnimationFrames() on every frame
+   */
+  private updateAnimationFrameHighlight(animationId: string, frameIndex: number): void {
+    const preview = this.animationPreviewManager.get(animationId);
+    if (!preview) return;
+
+    // Get the spritesheet for this animation
+    const sheetId = preview.spriteSheetId;
+    const sheetInstance = this.spriteSheetManager.get(sheetId);
+    if (!sheetInstance?.sheetCard?.controller) return;
+
+    // Update just the current frame index (don't rebuild entire highlight)
+    sheetInstance.sheetCard.controller.setCurrentAnimationFrameIndex(frameIndex);
   }
 
   /**
@@ -1656,6 +2397,15 @@ export class SpriteEditor {
       window.removeEventListener('beforeunload', this.beforeUnloadHandler);
       this.beforeUnloadHandler = null;
     }
+
+    // Clean up file drop handler
+    if (this.fileDropHandler) {
+      this.fileDropHandler.destroy();
+      this.fileDropHandler = null;
+    }
+
+    // Clean up drag overlay
+    this.hideDragOverlay();
 
     // Destroy all sprite sheet controllers to prevent memory leaks
     this.spriteSheetManager.getAll().forEach(instance => {

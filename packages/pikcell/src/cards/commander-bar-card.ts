@@ -20,10 +20,10 @@ interface ButtonDef {
 }
 
 export interface CommanderBarCallbacks {
-  onNew?: () => void;
-  onSave?: () => void;
-  onLoad?: () => void;
+  onProject?: () => void;
   onExport?: () => void;
+  onNewAnimation?: () => void;
+  onSheets?: () => void;
   onApplyLayout?: () => void;
   onSaveLayoutSlot?: (slot: 'A' | 'B' | 'C') => void;
   onLoadLayoutSlot?: (slot: 'A' | 'B' | 'C') => void;
@@ -51,10 +51,10 @@ export interface CommanderBarCardResult {
 
 /** Left-side button definitions */
 const LEFT_BUTTONS: ButtonDef[] = [
-  { label: 'New', callbackKey: 'onNew' },
-  { label: 'Save', callbackKey: 'onSave' },
-  { label: 'Load', callbackKey: 'onLoad' },
-  { label: 'Export', callbackKey: 'onExport' }
+  { label: 'Project', callbackKey: 'onProject' },
+  { label: 'Export', callbackKey: 'onExport' },
+  { label: 'Anim', callbackKey: 'onNewAnimation' },
+  { label: 'Sheets', callbackKey: 'onSheets' }
 ];
 
 /** Layout slot identifiers */
